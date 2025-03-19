@@ -13,8 +13,10 @@ import time
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 
-# Import LLM class
+# Import LLM class and our custom modules
 from llm import LLM
+from knowledge_graph import KnowledgeGraph
+from reasoner import ToG2Reasoner
 
 # Configure logging
 logging.basicConfig(
