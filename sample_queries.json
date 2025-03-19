@@ -1,0 +1,29 @@
+{
+    "queries": [
+        {
+            "id": "q1",
+            "text": "Những tác phẩm nào của Nguyễn Nhật Ánh đã được chuyển thể thành phim?",
+            "description": "Tìm các tác phẩm của Nguyễn Nhật Ánh đã được chuyển thể thành phim"
+        },
+        {
+            "id": "q2",
+            "text": "Những tác giả nào chịu ảnh hưởng từ văn học Pháp?",
+            "description": "Tìm các tác giả chịu ảnh hưởng từ văn học Pháp"
+        },
+        {
+            "id": "q3",
+            "text": "Những tác phẩm văn học thiếu nhi nào đã đạt giải thưởng?",
+            "description": "Tìm các tác phẩm văn học thiếu nhi đã đạt giải thưởng"
+        },
+        {
+            "id": "q4",
+            "text": "Những tác phẩm nào của các tác giả chịu ảnh hưởng từ văn học dân gian?",
+            "description": "Tìm các tác phẩm của các tác giả chịu ảnh hưởng từ văn học dân gian"
+        },
+        {
+            "id": "q5",
+            "text": "Những tác giả nào vừa chịu ảnh hưởng từ văn học Pháp vừa đạt giải thưởng?",
+            "description": "Tìm các tác giả chịu ảnh hưởng từ văn học Pháp và đã đạt giải thưởng"
+        }
+    ]
+} 

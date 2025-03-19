@@ -1,0 +1,17 @@
+[project]
+name = "llm-thinking-on-graph"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "matplotlib>=3.10.1",
+    "networkx>=3.4.2",
+    "numpy>=2.2.4",
+    "openai>=1.66.5",
+    "pandas>=2.2.3",
+    "requests>=2.32.3",
+    "sentence-transformers>=3.4.1",
+    "streamlit>=1.43.2",
+    "torch>=2.6.0",
+]
