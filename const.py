@@ -1,54 +1,73 @@
-"""Constants for LLM prompts."""
+# Prompt for entity recognition
+ENTITY_RECOGNITION_SYSTEM_PROMPT = """
+You are an entity linker that identifies entities mentioned in queries. Extract only the entities that exist in the provided list of entity names.
+"""
 
-ENTITY_RECOGNITION_SYSTEM_PROMPT = "You are an expert entity recognition system. Extract entities from the given query."
-
-ENTITY_RECOGNITION_PROMPT = """Given the following query and a list of known entities, identify which entities (if any) are
-mentioned or strongly implied in the query. Return only the names of the entities, separated by commas.
-
+ENTITY_RECOGNITION_PROMPT = """
 Query: {query}
 
-Known entities:
-{entity_names}
+Available entities: {entity_names}
 
-Entities mentioned or implied in the query:"""
+List only the entities that are directly mentioned or clearly referenced in the query. Return them as a comma-separated list.
+"""
 
-RELATION_RANKING_SYSTEM_PROMPT = "You are an AI assistant that helps rank relations by relevance to a query."
+# Prompt for relation ranking
+RELATION_RANKING_SYSTEM_PROMPT = """
+You are a knowledge graph relation ranker that helps identify which relations are most relevant to answering a query.
+"""
 
-RELATION_RANKING_PROMPT = """Given a query and a set of relations connected to entity "{entity_name}", rank the relations 
-by their likely relevance to answering the query. Return the results as a JSON array where each item has 
-"relation_name" and "score" (0-10, with 10 being most relevant).
-
+RELATION_RANKING_PROMPT = """
 Query: {query}
 
-Relations:
+Entity: {entity_name}
+
+Available relations:
 {relation_info}
 
-JSON ranking:"""
+Rank the relations above by how relevant they are for answering the query about {entity_name}.
+For each relation, provide a score from 0 to 10, where:
+- 0 means completely irrelevant
+- 10 means highly relevant to answering the query
 
-ANSWER_GENERATION_SYSTEM_PROMPT = """You are an AI assistant specialized in generating comprehensive answers based on retrieved information.
-Focus on being accurate, concise, and directly answering the question using only the provided information."""
+Return a JSON array in this format:
+[
+  {{"relation_name": "relation1", "score": score1}},
+  {{"relation_name": "relation2", "score": score2}},
+  ...
+]
+"""
 
-ANSWER_GENERATION_PROMPT = """Please answer the following question based strictly on the provided information.
-Do not introduce facts not present in the provided sentences or entity relationships.
+# Prompt for answer generation
+ANSWER_GENERATION_SYSTEM_PROMPT = """
+You are a helpful assistant that provides accurate, comprehensive answers based on the provided information.
+"""
 
-Question: {query}
-
-Relevant Information:
-{formatted_sentences}
-
-Entity Relationships:
-{formatted_chains}
-
-Provide a comprehensive, factual answer to the question based solely on the information above:"""
-
-CONTEXT_ANALYSIS_SYSTEM_PROMPT = "You are an expert at evaluating text relevance to questions."
-
-CONTEXT_ANALYSIS_PROMPT = """On a scale of 0 to 10, rate how relevant the following text about "{entity_name}" is to 
-answering the query. Return only the numeric score, nothing else.
+ANSWER_GENERATION_PROMPT = """
+Answer the following query based ONLY on the information provided in the context snippets and entity chains.
 
 Query: {query}
 
-Text about {entity_name}:
-{context}
+Relevant context snippets:
+{formatted_sentences}
 
-Relevance score (0-10):"""
+Entity connections:
+{formatted_chains}
+
+Provide a comprehensive, accurate answer using only the information above. If the information is insufficient to fully answer the query, clearly state what remains unknown.
+"""
+
+# Prompt for context analysis
+CONTEXT_ANALYSIS_SYSTEM_PROMPT = """
+You are a content analyzer that evaluates how relevant a piece of text is to a specific query.
+"""
+
+CONTEXT_ANALYSIS_PROMPT = """
+Query: {query}
+
+Entity: {entity_name}
+
+Context: {context}
+
+On a scale of 0 to 10, how relevant is this context for answering the query about {entity_name}?
+Provide only the numeric score without explanation.
+"""

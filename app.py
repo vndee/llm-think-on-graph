@@ -40,14 +40,14 @@ st.set_page_config(
 load_css()
 
 # Add custom header
-st.markdown("""
-    <div style='text-align: center; padding: 2rem 0;'>
-        <h1>Think-on-Graph 2.0 Demo</h1>
-        <p style='font-size: 1.2rem; color: #666;'>
-            Kết hợp Knowledge Graph và LLM cho suy luận đa bước
-        </p>
-    </div>
-""", unsafe_allow_html=True)
+# st.markdown("""
+#     <div style='text-align: center; padding: 2rem 0;'>
+#         <h1>Think-on-Graph 2.0 Demo</h1>
+#         <p style='font-size: 1.2rem; color: #666;'>
+#             Kết hợp Knowledge Graph và LLM cho suy luận đa bước
+#         </p>
+#     </div>
+# """, unsafe_allow_html=True)
 
 # Cache model sentence transformer để tính cosine similarity
 @st.cache_resource
@@ -73,26 +73,30 @@ class KnowledgeGraph:
         
     def load_from_files(self, entities_file, relations_file, triples_file, documents_file):
         """Load knowledge graph data from JSON files"""
-        with open(entities_file, 'r') as f:
+        with open(entities_file, 'r', encoding='utf-8') as f:
             entities_data = json.load(f)
             for entity in entities_data:
                 self.entities[entity['id']] = entity
         
-        with open(relations_file, 'r') as f:
+        with open(relations_file, 'r', encoding='utf-8') as f:
             relations_data = json.load(f)
             for relation in relations_data:
                 self.relations[relation['id']] = relation
         
-        with open(triples_file, 'r') as f:
-            self.triples = json.load(f)
+        with open(triples_file, 'r', encoding='utf-8') as f:
+            triples_data = json.load(f)
+            for triple in triples_data:
+                self.triples.append(triple)
         
-        with open(documents_file, 'r') as f:
+        with open(documents_file, 'r', encoding='utf-8') as f:
             documents_data = json.load(f)
             for doc in documents_data:
                 self.documents[doc['entity_id']] = doc['content']
         
         # Build graph
         self.build_graph()
+        
+        logger.info(f"Loaded knowledge graph with {len(self.entities)} entities, {len(self.relations)} relations, {len(self.triples)} triples, and {len(self.documents)} documents")
     
     def build_graph(self):
         """Build a NetworkX graph from triples"""
@@ -100,23 +104,20 @@ class KnowledgeGraph:
         
         # Add nodes
         for entity_id, entity in self.entities.items():
-            self.graph.add_node(entity_id, label=entity['name'], type=entity['type'])
+            self.graph.add_node(entity_id, label=entity['name'], type=entity.get('type', 'Entity'))
         
         # Add edges
         for triple in self.triples:
             head = triple['head']
             tail = triple['tail']
             relation = triple['relation']
+            
+            # Skip if head or tail entity doesn't exist
+            if head not in self.entities or tail not in self.entities:
+                continue
+                
             relation_name = self.relations[relation]['name'] if relation in self.relations else relation
             self.graph.add_edge(head, tail, relation=relation, label=relation_name)
-    
-    def identify_entities_from_query(self, query: str) -> List[str]:
-        """Identify potential entities from the query by simple name matching"""
-        entities_found = []
-        for entity_id, entity in self.entities.items():
-            if entity['name'].lower() in query.lower():
-                entities_found.append(entity_id)
-        return entities_found
     
     def get_relation_candidates(self, entity_id: str) -> List[Dict]:
         """Get all relations connected to an entity"""
@@ -131,6 +132,8 @@ class KnowledgeGraph:
                 'entity_name': self.graph.nodes[entity_id]['label'],
                 'relation': data['relation'],
                 'relation_name': data['label'],
+                'target_id': neighbor,
+                'target_name': self.graph.nodes[neighbor]['label'],
                 'head': True
             })
         
@@ -141,6 +144,8 @@ class KnowledgeGraph:
                 'entity_name': self.graph.nodes[entity_id]['label'],
                 'relation': data['relation'],
                 'relation_name': data['label'],
+                'target_id': neighbor,
+                'target_name': self.graph.nodes[neighbor]['label'],
                 'head': False
             })
         
@@ -152,8 +157,21 @@ class KnowledgeGraph:
         if not candidates:
             return []
         
-        # Compute relevance scores based on relation names
-        relation_names = [f"{cand['relation_name']}" for cand in candidates]
+        # Use LLM for relation ranking if available
+        if self.llm:
+            try:
+                entity_name = self.graph.nodes[entity_id]['label']
+                ranked_relations = self.llm.rank_relations(query, entity_name, candidates)
+                
+                # Sort by score and keep top relations with score > 0.2
+                ranked_relations = [rel for rel in ranked_relations if rel['score'] > 0.2]
+                ranked_relations = sorted(ranked_relations, key=lambda x: x['score'], reverse=True)
+                return ranked_relations
+            except Exception as e:
+                logger.error(f"Error in LLM relation ranking: {e}")
+        
+        # Fallback to embedding-based ranking
+        relation_names = [f"{cand['relation_name']} connects {cand['entity_name']} to {cand['target_name']}" for cand in candidates]
         
         if self.llm and self.llm.use_embedding_api:
             # Use LLM's embedding API
@@ -168,9 +186,10 @@ class KnowledgeGraph:
         for i, cand in enumerate(candidates):
             cand['score'] = float(scores[i])
         
-        # Sort by score and keep top 3
+        # Sort by score and keep top relations with score > 0.2
+        candidates = [cand for cand in candidates if cand['score'] > 0.2]
         candidates = sorted(candidates, key=lambda x: x['score'], reverse=True)
-        return candidates[:3]  # Keep top 3
+        return candidates
     
     def get_entity_candidates(self, entity_id: str, relation: str, is_head: bool) -> List[str]:
         """Get entities connected via a specific relation"""
@@ -193,10 +212,15 @@ class KnowledgeGraph:
     
     def search_entity_documents(self, entity_ids: List[str], query: str) -> List[Dict]:
         """Search for relevant information in entity documents"""
+        if not entity_ids:
+            return []
+            
         results = []
         
-        # Prepare texts for embedding
-        texts = []
+        # Prepare for document search
+        all_sentences = []
+        entity_sentence_map = {}  # Maps sentence index to entity ID
+        
         for entity_id in entity_ids:
             if entity_id not in self.documents:
                 continue
@@ -204,54 +228,103 @@ class KnowledgeGraph:
             # Split document into sentences
             document = self.documents[entity_id]
             sentences = re.split(r'(?<=[.!?])\s+', document)
-            texts.extend(sentences)
+            
+            # Store sentence index to entity mapping
+            start_idx = len(all_sentences)
+            all_sentences.extend(sentences)
+            end_idx = len(all_sentences)
+            
+            for i in range(start_idx, end_idx):
+                entity_sentence_map[i] = entity_id
         
-        if not texts:
+        if not all_sentences:
             return results
             
+        # Calculate relevance scores
         if self.llm and self.llm.use_embedding_api:
             # Use LLM's embedding API
-            scores = self.llm.compute_similarity(query, texts)
+            scores = self.llm.compute_similarity(query, all_sentences)
         else:
             # Use local sentence transformer
-            query_emb = model.encode(query, convert_to_tensor=True)
-            sentences_emb = model.encode(texts, convert_to_tensor=True)
-            scores = util.pytorch_cos_sim(query_emb, sentences_emb)[0].cpu().numpy()
+            try:
+                query_emb = model.encode(query, convert_to_tensor=True)
+                sentences_emb = model.encode(all_sentences, convert_to_tensor=True)
+                scores = util.pytorch_cos_sim(query_emb, sentences_emb)[0].cpu().numpy()
+            except Exception as e:
+                logger.error(f"Error computing sentence embeddings: {e}")
+                # Fallback to simple keyword matching
+                scores = []
+                query_words = set(query.lower().split())
+                for sentence in all_sentences:
+                    sentence_words = set(sentence.lower().split())
+                    overlap = len(query_words.intersection(sentence_words))
+                    score = overlap / max(1, len(query_words))
+                    scores.append(score)
         
-        # Add top sentences to results
-        for i, score in enumerate(scores):
-            # Find which entity this sentence belongs to
-            current_pos = 0
-            entity_id = None
-            for eid in entity_ids:
-                if eid not in self.documents:
-                    continue
-                doc_sentences = re.split(r'(?<=[.!?])\s+', self.documents[eid])
-                if current_pos <= i < current_pos + len(doc_sentences):
-                    entity_id = eid
-                    break
-                current_pos += len(doc_sentences)
+        # Create results with scores
+        for i, (sentence, score) in enumerate(zip(all_sentences, scores)):
+            entity_id = entity_sentence_map[i]
+            entity_name = self.graph.nodes[entity_id]['label']
             
-            if entity_id:
-                results.append({
-                    'entity_id': entity_id,
-                    'entity_name': self.graph.nodes[entity_id]['label'],
-                    'text': texts[i],
-                    'score': float(score)
-                })
+            results.append({
+                'entity_id': entity_id,
+                'entity_name': entity_name,
+                'text': sentence,
+                'score': float(score)
+            })
         
         # Sort by relevance
         results = sorted(results, key=lambda x: x['score'], reverse=True)
-        return results[:10]  # Return top 10 sentences
+        return results[:20]  # Return top 20 sentences
     
-    def visualize_graph(self, highlight_entities=None):
+    def visualize_graph(self, highlight_entities=None, max_nodes=50):
         """Visualize the knowledge graph using NetworkX and Matplotlib"""
-        plt.figure(figsize=(12, 8))
+        plt.figure(figsize=(10, 8))
         
-        # Create a copy of the graph for visualization
-        G = self.graph.copy()
+        # Create a subgraph if highlight_entities is provided
+        if highlight_entities:
+            # Get nodes within 2 steps of highlighted nodes
+            nodes_to_include = set(highlight_entities)
+            for node in highlight_entities:
+                if node in self.graph:
+                    # Add outgoing neighbors
+                    nodes_to_include.update(nx.descendants(self.graph, node))
+                    # Add incoming neighbors
+                    nodes_to_include.update(nx.ancestors(self.graph, node))
+            
+            # Limit to max_nodes
+            if len(nodes_to_include) > max_nodes:
+                # Prioritize highlighted entities and their direct neighbors
+                direct_neighbors = set()
+                for node in highlight_entities:
+                    if node in self.graph:
+                        direct_neighbors.update(self.graph.successors(node))
+                        direct_neighbors.update(self.graph.predecessors(node))
+                
+                # Create a prioritized set of nodes
+                prioritized_nodes = set(highlight_entities)
+                prioritized_nodes.update(direct_neighbors)
+                
+                # Add remaining nodes until max_nodes
+                remaining_nodes = nodes_to_include - prioritized_nodes
+                remaining_nodes = list(remaining_nodes)[:max_nodes - len(prioritized_nodes)]
+                
+                nodes_to_include = prioritized_nodes.union(remaining_nodes)
+            
+            # Create subgraph
+            G = self.graph.subgraph(nodes_to_include).copy()
+        else:
+            # If no highlight, just show a subset of nodes for visibility
+            if len(self.graph.nodes) > max_nodes:
+                # Get nodes with highest degree centrality
+                centrality = nx.degree_centrality(self.graph)
+                top_nodes = sorted(centrality.items(), key=lambda x: x[1], reverse=True)[:max_nodes]
+                nodes_to_include = [node for node, _ in top_nodes]
+                G = self.graph.subgraph(nodes_to_include).copy()
+            else:
+                G = self.graph.copy()
         
-        # Define node colors based on type
+        # Define node colors based on type and highlight status
         node_colors = []
         for node in G.nodes():
             if highlight_entities and node in highlight_entities:
@@ -260,11 +333,11 @@ class KnowledgeGraph:
                 node_type = G.nodes[node].get('type', '')
                 if node_type == 'Person':
                     node_colors.append('skyblue')
-                elif node_type == 'Field':
+                elif node_type == 'Organization':
                     node_colors.append('lightgreen')
-                elif node_type == 'Country':
+                elif node_type == 'Location':
                     node_colors.append('orange')
-                elif node_type == 'Award':
+                elif node_type == 'Work':
                     node_colors.append('gold')
                 else:
                     node_colors.append('lightgray')
@@ -275,7 +348,7 @@ class KnowledgeGraph:
         # Get edge labels
         edge_labels = {(u, v): G.edges[u, v]['label'] for u, v in G.edges()}
         
-        # Draw the graph
+        # Draw the graph with a deterministic layout
         pos = nx.spring_layout(G, seed=42)
         nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=500, alpha=0.8)
         nx.draw_networkx_edges(G, pos, width=1.0, arrowsize=15)
@@ -286,200 +359,232 @@ class KnowledgeGraph:
         
         plt.axis('off')
         return plt
+    
 
 # Use the updated ToG2Reasoner class
 class ToG2Reasoner:
-    def __init__(self, knowledge_graph: KnowledgeGraph, llm: LLM, depth: int = 2, width: int = 3):
+    def __init__(self, knowledge_graph: KnowledgeGraph, llm: LLM, max_depth: int = 3, max_width: int = 3):
         self.knowledge_graph = knowledge_graph
         self.llm = llm
-        self.depth = depth
-        self.width = width
+        self.max_depth = max_depth
+        self.max_width = max_width
         self.knowledge_graph.set_llm(llm)  # Set LLM instance for embedding computation
-        logger.info(f"Initialized ToG2Reasoner with depth={depth}, width={width}")
+        logger.info(f"Initialized ToG2Reasoner with depth={max_depth}, width={max_width}")
         
     def identify_topic_entities(self, query: str) -> List[str]:
-        """Identify topic entities from query"""
+        """Identify topic entities from the query using LLM."""
+        logger.info("Identifying topic entities from query")
+        
+        # Get all entity names and create a mapping from name to ID
+        entity_names = []
+        name_to_id = {}
+        for entity_id, entity in self.knowledge_graph.entities.items():
+            entity_names.append(entity['name'])
+            name_to_id[entity['name']] = entity_id
+        
+        # Try LLM-based entity identification 
         if self.llm:
-            # Use LLM for entity identification
-            entity_names = [entity['name'] for entity_id, entity in self.knowledge_graph.entities.items()]
-            identified_names = self.llm.identify_entities(query, entity_names)
-            logger.info("LLM identified entities: %s", identified_names)
-            
-            # Map back to entity ids
-            topic_entities = []
-            for entity_id, entity in self.knowledge_graph.entities.items():
-                if entity['name'] in identified_names:
-                    topic_entities.append(entity_id)
-        else:
-            # Fallback to simple name matching
-            topic_entities = self.knowledge_graph.identify_entities_from_query(query)
-            logger.info("Simple matching identified entities: %s", topic_entities)
-            
-        return topic_entities
-        
-    def explore_relations(self, topic_entities: List[str], query: str) -> List[Tuple[str, str, str]]:
-        """Explore relations and discover connected entities"""
-        entity_chains = []
-        current_entities = topic_entities
-        
-        for depth in range(self.depth):
-            if not current_entities:
-                break
+            try:
+                entities = self.llm.identify_entities(query, entity_names)
+                logger.info(f"LLM identified entities: {entities}")
                 
-            next_entities = []
-            for entity_id in current_entities:
-                # Get and prune relations
-                relations = self.knowledge_graph.prune_relations(entity_id, query)
+                # Convert entity names to IDs
+                valid_entity_ids = []
+                for name in entities:
+                    if name in name_to_id:
+                        valid_entity_ids.append(name_to_id[name])
                 
-                for relation in relations:
-                    # Get connected entities
-                    candidates = self.knowledge_graph.get_entity_candidates(
-                        relation['entity_id'],
-                        relation['relation'],
-                        relation['head']
-                    )
-                    
-                    # Add to chains
-                    for candidate_id in candidates:
-                        chain = (
-                            self.knowledge_graph.entities[relation['entity_id']]['name'],
-                            relation['relation_name'],
-                            self.knowledge_graph.entities[candidate_id]['name']
-                        )
-                        entity_chains.append(chain)
-                        next_entities.append(candidate_id)
-            
-            # Keep top entities for next iteration
-            if next_entities:
-                # Score entities based on their relations
-                entity_scores = {}
-                for entity_id in next_entities:
-                    entity_scores[entity_id] = len(self.knowledge_graph.get_relation_candidates(entity_id))
-                
-                # Sort by score and keep top self.width
-                current_entities = sorted(entity_scores.items(), key=lambda x: x[1], reverse=True)[:self.width]
-                current_entities = [entity_id for entity_id, _ in current_entities]
-        
-        return entity_chains
-        
-    def rank_entities(self, entity_chains: List[Tuple[str, str, str]], doc_results: List[Dict]) -> List[Dict]:
-        """Rank entities based on relevance"""
-        entity_scores = {}
-        
-        # Score entities based on document relevance
-        for doc in doc_results:
-            entity_id = doc['entity_id']
-            if entity_id in entity_scores:
-                entity_scores[entity_id] += doc['score']
-            else:
-                entity_scores[entity_id] = doc['score']
-        
-        # Add scores from entity chains
-        for chain in entity_chains:
-            # Get entity IDs from names
-            entity_ids = []
-            for name in [chain[0], chain[2]]:
-                for entity_id, entity in self.knowledge_graph.entities.items():
-                    if entity['name'] == name:
-                        entity_ids.append(entity_id)
-                        break
-            
-            # Add chain score to entities
-            for entity_id in entity_ids:
-                if entity_id in entity_scores:
-                    entity_scores[entity_id] += 1
+                if valid_entity_ids:
+                    entity_names_found = [self.knowledge_graph.entities[eid]['name'] for eid in valid_entity_ids]
+                    logger.info(f"Valid topic entities found: {entity_names_found} with IDs: {valid_entity_ids}")
+                    return valid_entity_ids
                 else:
-                    entity_scores[entity_id] = 1
+                    logger.warning("No valid entities found from LLM results")
+            except Exception as e:
+                logger.error(f"Error in LLM entity identification: {e}")
         
-        # Convert to list of dicts with entity info
-        ranked_entities = []
-        for entity_id, score in sorted(entity_scores.items(), key=lambda x: x[1], reverse=True):
-            entity = self.knowledge_graph.entities[entity_id]
-            ranked_entities.append({
-                'id': entity_id,
-                'name': entity['name'],
-                'type': entity['type'],
-                'score': score
-            })
+        # Fallback to simple name matching
+        matched_entity_ids = []
+        for name, entity_id in name_to_id.items():
+            if name.lower() in query.lower():
+                matched_entity_ids.append(entity_id)
         
-        return ranked_entities
+        if matched_entity_ids:
+            entity_names_found = [self.knowledge_graph.entities[eid]['name'] for eid in matched_entity_ids]
+            logger.info(f"Found entities by name matching: {entity_names_found} with IDs: {matched_entity_ids}")
+            return matched_entity_ids
+        else:
+            logger.warning("No topic entities found by any method")
+            return []
+    
+    def rank_relations(self, topic_entity_id: str, query: str):
+        """Rank relations for a topic entity based on relevance to query."""
+        logger.info(f"Ranking relations for entity {topic_entity_id}")
         
-    def reason(self, query: str) -> Tuple[List[Dict], List[str], str]:
-        """Main reasoning method"""
+        # Get all relations for the entity
+        relations = self.knowledge_graph.get_relation_candidates(topic_entity_id)
+        
+        # If no relations, return empty list
+        if not relations:
+            return []
+        
+        # Use LLM to rank relations if available
+        if self.llm:
+            try:
+                entity_name = self.knowledge_graph.entities[topic_entity_id]['name']
+                ranked_relations = self.llm.rank_relations(query, entity_name, relations)
+                logger.info(f"LLM ranked {len(ranked_relations)} relations for {entity_name}")
+                return ranked_relations
+            except Exception as e:
+                logger.error(f"Error in LLM relation ranking: {e}")
+        
+        # Fallback to embedding-based ranking
+        return self.knowledge_graph.prune_relations(topic_entity_id, query)
+    
+    def search_entity_documents(self, entity_ids, query):
+        """Search for relevant context in entity documents."""
+        return self.knowledge_graph.search_entity_documents(entity_ids, query)
+    
+    def iterative_reasoning(self, query: str) -> Tuple[List[Dict], str]:
+        """Main iterative reasoning method implementing ToG-2 approach."""
         total_start_time = time.time()
         reasoning_steps = []
-        entity_chains = None
+        clues = None
         answer = None
         
-        # Step 1: Identify topic entities from query
+        # Step 1: Initial Topic Entities
         step_start_time = time.time()
-        logger.info("Step 1: Identifying topic entities from query")
         topic_entities = self.identify_topic_entities(query)
+        initial_topic_entities = topic_entities.copy()  # Save for visualization
         step_time = time.time() - step_start_time
+        
         reasoning_steps.append({
-            'step': 'Entity Identification',
-            'description': f'Identified {len(topic_entities)} topic entities',
+            'step': 'Topic Entity Identification',
+            'description': f'Identified {len(topic_entities)} initial topic entities',
             'entities': topic_entities,
             'time': f"{step_time:.2f}s"
         })
         
         if not topic_entities:
-            logger.warning("No topic entities found")
-            return reasoning_steps, None, "Could not identify any relevant entities from the query."
+            return reasoning_steps, "Could not identify any relevant entities from the query."
+        
+        # Initial document retrieval for the topic entities
+        initial_contexts = self.search_entity_documents(topic_entities, query)
+        
+        reasoning_steps.append({
+            'step': 'Initial Context Retrieval',
+            'description': f'Retrieved {len(initial_contexts)} initial context snippets',
+            'documents': initial_contexts,
+            'time': f"0.00s"  # Already counted in the previous step
+        })
+        
+        # Check if initial information is sufficient
+        if self.llm:
+            try:
+                # Simplified for the demo, could adapt with proper LLM prompt
+                if len(initial_contexts) > 5 and sum(doc['score'] for doc in initial_contexts[:5]) > 4.0:
+                    # Information might be sufficient
+                    answer = self.generate_answer(query, initial_contexts, [])
+                    reasoning_steps.append({
+                        'step': 'Answer Generation',
+                        'description': 'Generated answer from initial context',
+                        'answer': answer,
+                        'time': f"0.00s"
+                    })
+                    return reasoning_steps, answer
+            except Exception as e:
+                logger.error(f"Error checking initial context sufficiency: {e}")
+        
+        # Iterative exploration
+        all_entity_chains = []
+        all_contexts = initial_contexts
+        
+        for depth in range(self.max_depth):
+            logger.info(f"Starting iteration {depth+1}/{self.max_depth}")
+            step_start_time = time.time()
+            iteration_chains = []
+            next_topic_entities = []
             
-        # Step 2: Explore relations and discover connected entities
-        step_start_time = time.time()
-        logger.info("Step 2: Exploring relations and discovering connected entities")
-        entity_chains = self.explore_relations(topic_entities, query)
-        step_time = time.time() - step_start_time
-        reasoning_steps.append({
-            'step': 'Entity Discovery',
-            'description': f'Discovered {len(entity_chains)} entity chains',
-            'entities': entity_chains,
-            'time': f"{step_time:.2f}s"
-        })
-        
-        if not entity_chains:
-            logger.warning("No entity chains found")
-            return reasoning_steps, None, "Could not find any relevant information to answer the query."
+            # Step 2: Knowledge-guided Graph Search
+            for entity_id in topic_entities:
+                entity_name = self.knowledge_graph.entities[entity_id]['name']
+                
+                # Relation Discovery and Pruning
+                ranked_relations = self.rank_relations(entity_id, query)
+                
+                # Keep only top relations based on width parameter
+                top_relations = ranked_relations[:self.max_width]
+                
+                # Entity Discovery
+                for relation in top_relations:
+                    related_entity_ids = self.knowledge_graph.get_entity_candidates(
+                        relation['entity_id'],
+                        relation['relation'],
+                        relation['head']
+                    )
+                    
+                    for related_id in related_entity_ids:
+                        if related_id in self.knowledge_graph.entities:
+                            related_name = self.knowledge_graph.entities[related_id]['name']
+                            chain = (entity_name, relation['relation_name'], related_name)
+                            iteration_chains.append(chain)
+                            
+                            # Add to candidate entities for next iteration
+                            if related_id not in next_topic_entities:
+                                next_topic_entities.append(related_id)
             
-        # Step 3: Search documents for relevant information
-        step_start_time = time.time()
-        logger.info("Step 3: Searching documents for relevant information")
-        doc_results = self.knowledge_graph.search_entity_documents(
-            [entity['id'] for chain in entity_chains for entity in chain],
-            query
-        )
-        step_time = time.time() - step_start_time
-        reasoning_steps.append({
-            'step': 'Document Search',
-            'description': f'Found {len(doc_results)} relevant document snippets',
-            'documents': doc_results,
-            'time': f"{step_time:.2f}s"
-        })
+            # Add chains to the accumulated list
+            all_entity_chains.extend(iteration_chains)
+            
+            # Step 3: Knowledge-guided Context Retrieval
+            iteration_contexts = self.search_entity_documents(next_topic_entities, query)
+            all_contexts.extend(iteration_contexts)
+            
+            # Context-based Entity Pruning - rank entities based on context relevance
+            entity_scores = {}
+            for doc in iteration_contexts:
+                entity_id = doc['entity_id']
+                if entity_id in entity_scores:
+                    entity_scores[entity_id] += doc['score']
+                else:
+                    entity_scores[entity_id] = doc['score']
+            
+            # Sort by score and keep top entities for next iteration
+            if entity_scores:
+                sorted_entities = sorted(entity_scores.items(), key=lambda x: x[1], reverse=True)
+                topic_entities = [entity_id for entity_id, _ in sorted_entities[:self.max_width]]
+            else:
+                # No relevant context found, use all discovered entities
+                topic_entities = next_topic_entities[:self.max_width]
+            
+            step_time = time.time() - step_start_time
+            
+            reasoning_steps.append({
+                'step': f'Iteration {depth+1} Exploration',
+                'description': f'Explored {len(iteration_chains)} new entity chains and retrieved {len(iteration_contexts)} context snippets',
+                'entity_chains': iteration_chains,
+                'documents': iteration_contexts,
+                'topic_entities': topic_entities,
+                'time': f"{step_time:.2f}s"
+            })
+            
+            # Step 4: Reasoning with Hybrid Knowledge
+            # Check if we should continue or if we have enough information
+            if self.llm and (depth == self.max_depth - 1 or len(all_contexts) > 20):
+                # For the demo, we'll generate an answer at the end or if we have enough context
+                answer = self.generate_answer(query, all_contexts, all_entity_chains)
+                break
         
-        # Step 4: Rank entities based on relevance
-        step_start_time = time.time()
-        logger.info("Step 4: Ranking entities based on relevance")
-        ranked_entities = self.rank_entities(entity_chains, doc_results)
-        step_time = time.time() - step_start_time
-        reasoning_steps.append({
-            'step': 'Entity Ranking',
-            'description': f'Ranked {len(ranked_entities)} entities by relevance',
-            'entities': ranked_entities,
-            'time': f"{step_time:.2f}s"
-        })
+        # Final answer generation if not done in the loop
+        if not answer:
+            answer = self.generate_answer(query, all_contexts, all_entity_chains)
         
-        # Step 5: Generate final answer
-        step_start_time = time.time()
-        logger.info("Step 5: Generating final answer")
-        answer = self.generate_answer(query, ranked_entities, doc_results)
-        step_time = time.time() - step_start_time
+        # Add answer generation step
         reasoning_steps.append({
             'step': 'Answer Generation',
-            'description': 'Generated final answer',
+            'description': 'Generated final answer based on all collected information',
             'answer': answer,
-            'time': f"{step_time:.2f}s"
+            'time': f"0.00s"
         })
         
         # Add total processing time
@@ -491,101 +596,45 @@ class ToG2Reasoner:
         })
         
         logger.info(f"Completed reasoning process in {total_time:.2f}s")
-        return reasoning_steps, entity_chains, answer
+        return reasoning_steps, answer
     
-    def generate_answer(self, query, sentences, entity_chains):
-        """Generate final answer based on collected information (fallback method)"""
-        # In a real implementation, this would use an LLM
-        # For this demo, we'll just return the top sentences
+    def generate_answer(self, query, contexts, entity_chains):
+        """Generate answer based on collected information."""
+        if self.llm:
+            try:
+                return self.llm.generate_answer(query, contexts, entity_chains)
+            except Exception as e:
+                logger.error(f"Error in LLM answer generation: {e}")
         
-        if not sentences:
+        # Fallback if LLM is not available or fails
+        if not contexts:
             return "Could not find sufficient information to answer the query."
         
-        # Sort sentences by relevance
-        sorted_sentences = sorted(sentences, key=lambda x: x['score'], reverse=True)
-        
-        # Create a basic answer by combining top 3 sentences
+        # Create a basic answer by combining top sentences
         answer = "Based on the information collected:\n\n"
-        for i, sent in enumerate(sorted_sentences[:3]):
-            answer += f"{i+1}. {sent['text']} (From {sent['entity_name']})\n\n"
+        sorted_contexts = sorted(contexts, key=lambda x: x['score'], reverse=True)
         
-        # Add entity paths that were explored
+        for i, ctx in enumerate(sorted_contexts[:5]):
+            answer += f"{i+1}. {ctx['text']} (From {ctx['entity_name']})\n\n"
+        
+        # Add entity relationships that were explored
         if entity_chains:
             answer += "Entity connections explored:\n"
-            for i, chain in enumerate(entity_chains[:5]):  # Show up to 5 chains
-                answer += f"- {chain[0]} -> {chain[1]} -> {chain[2]}\n"
+            for i, chain in enumerate(entity_chains[:5]):
+                answer += f"- {chain[0]} → {chain[1]} → {chain[2]}\n"
         
         return answer
 
-def load_sample_data():
+def load_sample_data(data_dir='data'):
     """Load sample data if no files are uploaded"""
     kg = KnowledgeGraph()
-    
-    # Create temp files with sample data
-    os.makedirs('temp', exist_ok=True)
-    
-    entities = [
-        {"id": "E1", "name": "Albert Einstein", "type": "Person"},
-        {"id": "E2", "name": "Physics", "type": "Field"},
-        {"id": "E3", "name": "Germany", "type": "Country"},
-        {"id": "E4", "name": "Nobel Prize in Physics", "type": "Award"},
-        {"id": "E5", "name": "Theory of Relativity", "type": "Scientific Theory"},
-        {"id": "E6", "name": "Marie Curie", "type": "Person"},
-        {"id": "E7", "name": "Poland", "type": "Country"},
-        {"id": "E8", "name": "Chemistry", "type": "Field"}
-    ]
-    
-    relations = [
-        {"id": "R1", "name": "field_of_work"},
-        {"id": "R2", "name": "born_in"},
-        {"id": "R3", "name": "award_received"},
-        {"id": "R4", "name": "developed"}
-    ]
-    
-    triples = [
-        {"head": "E1", "relation": "R1", "tail": "E2"},
-        {"head": "E1", "relation": "R2", "tail": "E3"},
-        {"head": "E1", "relation": "R3", "tail": "E4"},
-        {"head": "E1", "relation": "R4", "tail": "E5"},
-        {"head": "E6", "relation": "R1", "tail": "E2"},
-        {"head": "E6", "relation": "R1", "tail": "E8"},
-        {"head": "E6", "relation": "R2", "tail": "E7"},
-        {"head": "E6", "relation": "R3", "tail": "E4"}
-    ]
-    
-    documents = [
-        {"entity_id": "E1", "content": "Albert Einstein was a German-born theoretical physicist who developed the theory of relativity. He received the Nobel Prize in Physics in 1921 for his explanation of the photoelectric effect."},
-        {"entity_id": "E2", "content": "Physics is the natural science that studies matter, its motion and behavior through space and time, and the related entities of energy and force."},
-        {"entity_id": "E3", "content": "Germany is a country in Central Europe. It is the second most populous country in Europe after Russia and the most populous member state of the European Union."},
-        {"entity_id": "E4", "content": "The Nobel Prize in Physics is a yearly award given by the Royal Swedish Academy of Sciences for those who have made the most outstanding contributions for mankind in the field of physics."},
-        {"entity_id": "E5", "content": "The theory of relativity usually encompasses two interrelated theories by Albert Einstein: special relativity and general relativity, proposed and published in 1905 and 1915, respectively."},
-        {"entity_id": "E6", "content": "Marie Curie was a Polish and naturalized-French physicist and chemist who conducted pioneering research on radioactivity. She was the first woman to win a Nobel Prize and remains the only person to win Nobel Prizes in two scientific fields."},
-        {"entity_id": "E7", "content": "Poland is a country in Central Europe. It is divided into 16 administrative provinces called voivodeships."},
-        {"entity_id": "E8", "content": "Chemistry is the scientific study of the properties and behavior of matter. It is a natural science that covers the elements that make up matter to the compounds made of atoms, molecules and ions."}
-    ]
-    
-    # Save sample data
-    with open('temp/entities.json', 'w') as f:
-        json.dump(entities, f)
-    
-    with open('temp/relations.json', 'w') as f:
-        json.dump(relations, f)
-    
-    with open('temp/triples.json', 'w') as f:
-        json.dump(triples, f)
-    
-    with open('temp/documents.json', 'w') as f:
-        json.dump(documents, f)
-    
-    # Load data into KG
-    kg.load_from_files('temp/entities.json', 'temp/relations.json', 'temp/triples.json', 'temp/documents.json')
-    
+    kg.load_from_files(os.path.join(data_dir, 'entities.json'), os.path.join(data_dir, 'relations.json'), os.path.join(data_dir, 'triples.json'), os.path.join(data_dir, 'documents.json'))    
     return kg
 
-def load_sample_queries():
+def load_sample_queries(data_dir='data'):
     """Load sample queries from JSON file"""
     try:
-        with open('sample_queries.json', 'r') as f:
+        with open(os.path.join(data_dir, 'sample_queries.json'), 'r') as f:
             return json.load(f)['queries']
     except FileNotFoundError:
         return []
@@ -598,6 +647,41 @@ def main():
         # Data configuration
         st.markdown("### Dữ liệu")
         use_sample_data = st.checkbox("Sử dụng dữ liệu mẫu", value=True)
+        
+        # Main content
+        if use_sample_data:
+            kg = load_sample_data()
+            st.sidebar.success("✅ Đã tải dữ liệu mẫu")
+        else:
+            st.sidebar.markdown("### Tải lên dữ liệu của bạn")
+            entities_file = st.sidebar.file_uploader("Tải lên entities.json", type=["json"])
+            relations_file = st.sidebar.file_uploader("Tải lên relations.json", type=["json"])
+            triples_file = st.sidebar.file_uploader("Tải lên triples.json", type=["json"])
+            documents_file = st.sidebar.file_uploader("Tải lên documents.json", type=["json"])
+            
+            if entities_file and relations_file and triples_file and documents_file:
+                # Save uploaded files
+                os.makedirs('uploads', exist_ok=True)
+                
+                with open('uploads/entities.json', 'wb') as f:
+                    f.write(entities_file.getbuffer())
+                
+                with open('uploads/relations.json', 'wb') as f:
+                    f.write(relations_file.getbuffer())
+                
+                with open('uploads/triples.json', 'wb') as f:
+                    f.write(triples_file.getbuffer())
+                
+                with open('uploads/documents.json', 'wb') as f:
+                    f.write(documents_file.getbuffer())
+                
+                # Load data into KG
+                kg = KnowledgeGraph()
+                kg.load_from_files('uploads/entities.json', 'uploads/relations.json', 'uploads/triples.json', 'uploads/documents.json')
+                st.sidebar.success("✅ Dữ liệu đã được tải lên thành công!")
+            else:
+                st.warning("Vui lòng tải lên đầy đủ các file dữ liệu cần thiết")
+                return
         
         # LLM configuration
         st.markdown("### Cấu hình LLM")
@@ -640,41 +724,24 @@ def main():
                 value=0.0,
                 help="Điều chỉnh độ ngẫu nhiên của câu trả lời"
             )
-    
-    # Main content
-    if use_sample_data:
-        kg = load_sample_data()
-        st.sidebar.success("✅ Đã tải dữ liệu mẫu")
-    else:
-        st.sidebar.markdown("### Tải lên dữ liệu của bạn")
-        entities_file = st.sidebar.file_uploader("Tải lên entities.json", type=["json"])
-        relations_file = st.sidebar.file_uploader("Tải lên relations.json", type=["json"])
-        triples_file = st.sidebar.file_uploader("Tải lên triples.json", type=["json"])
-        documents_file = st.sidebar.file_uploader("Tải lên documents.json", type=["json"])
         
-        if entities_file and relations_file and triples_file and documents_file:
-            # Save uploaded files
-            os.makedirs('uploads', exist_ok=True)
-            
-            with open('uploads/entities.json', 'wb') as f:
-                f.write(entities_file.getbuffer())
-            
-            with open('uploads/relations.json', 'wb') as f:
-                f.write(relations_file.getbuffer())
-            
-            with open('uploads/triples.json', 'wb') as f:
-                f.write(triples_file.getbuffer())
-            
-            with open('uploads/documents.json', 'wb') as f:
-                f.write(documents_file.getbuffer())
-            
-            # Load data into KG
-            kg = KnowledgeGraph()
-            kg.load_from_files('uploads/entities.json', 'uploads/relations.json', 'uploads/triples.json', 'uploads/documents.json')
-            st.sidebar.success("✅ Dữ liệu đã được tải lên thành công!")
-        else:
-            st.warning("Vui lòng tải lên đầy đủ các file dữ liệu cần thiết")
-            return
+        # ToG-2 Parameters
+        st.markdown("### Tham số ToG-2")
+        max_depth = st.slider(
+            "Độ sâu tìm kiếm tối đa",
+            min_value=1,
+            max_value=5,
+            value=3,
+            help="Số lượng vòng lặp tối đa trong quá trình tìm kiếm"
+        )
+        
+        max_width = st.slider(
+            "Độ rộng tìm kiếm tối đa",
+            min_value=1,
+            max_value=5,
+            value=3,
+            help="Số lượng thực thể được giữ lại trong mỗi vòng lặp"
+        )
     
     # Initialize LLM instance
     llm_instance = None
@@ -700,171 +767,210 @@ def main():
                 st.error(f"⚠️ Có lỗi xảy ra: {str(e)}")
                 return
                     
-    # Initialize reasoner with default depth and width
-    reasoner = ToG2Reasoner(kg, llm=llm_instance, depth=2, width=3)
+    # Initialize reasoner with configured parameters
+    reasoner = ToG2Reasoner(kg, llm=llm_instance, max_depth=max_depth, max_width=max_width)
     
     # Load sample queries
     sample_queries = load_sample_queries()
     
-    # Create columns for the query input section
-    query_col1, query_col2 = st.columns([2, 1])
+    # Add title and description
+    st.markdown("""
+        <div style='text-align: center; padding: 1rem 0;'>
+            <h1>Think-on-Graph 2.0 Demo</h1>
+            <p style='font-size: 1.2rem; color: #666;'>
+                Kết hợp Knowledge Graph và LLM cho suy luận đa bước sâu và chính xác
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
     
-    with query_col2:
-        if sample_queries:
-            # Add a dropdown for sample queries
-            selected_query = st.selectbox(
-                "Hoặc chọn câu hỏi mẫu",
-                options=[""] + [q["text"] for q in sample_queries],
-                format_func=lambda x: "Chọn câu hỏi mẫu..." if x == "" else x,
-                help="Chọn một trong những câu hỏi mẫu có sẵn"
+    # Create tabs for different sections
+    tab1, tab2 = st.tabs(["Demo", "Giới thiệu"])
+    
+    with tab2:
+        st.markdown("""
+        ## Think-on-Graph 2.0
+        
+        Think-on-Graph 2.0 (ToG-2) là một cách tiếp cận mới kết hợp chặt chẽ giữa Knowledge Graph và tài liệu văn bản để nâng cao khả năng suy luận đa bước của Large Language Models (LLM).
+        
+        ### Điểm nổi bật của ToG-2:
+        
+        1. **Tích hợp chặt chẽ KG và văn bản**: Sử dụng KG để dẫn dắt việc tìm kiếm thông tin trong văn bản, đồng thời sử dụng văn bản để làm phong phú và tinh chỉnh việc tìm kiếm trên đồ thị.
+        
+        2. **Tìm kiếm đa bước sâu hơn**: Cho phép LLM thực hiện suy luận sâu hơn bằng cách lặp lại quá trình tìm kiếm và tích lũy thông tin.
+        
+        3. **Suy luận có cơ sở**: Tăng cường độ tin cậy của câu trả lời từ LLM bằng cách cung cấp thông tin được tìm thấy từ cả KG và văn bản.
+        
+        4. **Linh hoạt**: Có thể áp dụng cho nhiều loại LLM khác nhau mà không cần đào tạo lại.
+        
+        ### Cách thức hoạt động:
+        
+        1. **Khởi tạo**: Xác định các thực thể chủ đề từ câu hỏi.
+        
+        2. **Tìm kiếm đồ thị dựa trên tri thức**: Khám phá các mối quan hệ và thực thể liên quan trên đồ thị kiến thức.
+        
+        3. **Tìm kiếm văn bản theo hướng dẫn tri thức**: Truy xuất thông tin từ tài liệu dựa trên các thực thể đã khám phá.
+        
+        4. **Tinh chỉnh thực thể dựa trên ngữ cảnh**: Sử dụng thông tin trong văn bản để xác định thực thể nào là quan trọng nhất.
+        
+        5. **Lặp lại quá trình**: Tiếp tục khám phá sâu hơn cho đến khi thu thập đủ thông tin.
+        
+        6. **Đưa ra câu trả lời**: Sinh câu trả lời dựa trên tất cả thông tin thu thập được.
+        """)
+    
+    with tab1:
+        # Create columns for the query input section
+        query_col1, query_col2 = st.columns([3, 1])
+        
+        with query_col2:
+            if sample_queries:
+                # Add a dropdown for sample queries
+                selected_query = st.selectbox(
+                    "Hoặc chọn câu hỏi mẫu",
+                    options=[""] + [q["text"] for q in sample_queries],
+                    format_func=lambda x: "Chọn câu hỏi mẫu..." if x == "" else x,
+                    help="Chọn một trong những câu hỏi mẫu có sẵn"
+                )
+        
+        with query_col1:
+            # Text input for query
+            query = st.text_input(
+                "Nhập câu hỏi của bạn",
+                value=selected_query,
+                placeholder="Ví dụ: Nguyễn Nhật Ánh đã viết những tác phẩm nổi tiếng nào?",
+                help="Nhập câu hỏi liên quan đến tri thức trong hệ thống"
             )
-    
-    with query_col1:
-        # Text input for query
-        query = st.text_input(
-            "",
-            value=selected_query,
-            placeholder="Nhập câu hỏi của bạn...",
-            help="Ví dụ: Which country was Albert Einstein born in?"
-        )
-    
-    # Process query
-    if query:
-        # Create columns for metrics
-        col1, col2, col3 = st.columns(3)
         
-        with col1:
-            st.markdown("""
-                <div class='metric-container'>
-                    <div class='metric-value'>1</div>
-                    <div class='metric-label'>Số thực thể ban đầu</div>
-                </div>
-            """, unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown("""
-                <div class='metric-container'>
-                    <div class='metric-value'>3</div>
-                    <div class='metric-label'>Độ sâu tìm kiếm</div>
-                </div>
-            """, unsafe_allow_html=True)
-        
-        with col3:
-            st.markdown("""
-                <div class='metric-container'>
-                    <div class='metric-value'>3</div>
-                    <div class='metric-label'>Số thực thể mỗi bước</div>
-                </div>
-            """, unsafe_allow_html=True)
-        
-        # Create tabs before reasoning
-        tab1, tab2, tab3 = st.tabs(["Kết quả", "Quá trình suy luận", "Trực quan hóa đường dẫn"])
-        
-        # Initialize empty containers for each tab
-        with tab1:
-            results_container = st.empty()
-        
-        with tab2:
-            reasoning_container = st.container()
-        
-        with tab3:
-            visualization_container = st.empty()
-        
-        # Execute reasoning with real-time updates
-        with st.spinner("Đang thực hiện suy luận..."):
-            # Switch to reasoning tab while processing
-            st.query_params["active_tab"] = "Quá trình suy luận"
+        # Process query
+        if query:
+            # Create metrics for visualization
+            col1, col2, col3 = st.columns(3)
             
-            # Execute reasoning
-            reasoning_steps = []
-            entity_chains = None
-            answer = None
+            with col1:
+                st.markdown(f"""
+                    <div class='metric-container'>
+                        <div class='metric-value'>{max_width}</div>
+                        <div class='metric-label'>Độ rộng tìm kiếm</div>
+                    </div>
+                """, unsafe_allow_html=True)
             
-            # Create a placeholder for steps in the reasoning tab
-            with reasoning_container:
+            with col2:
+                st.markdown(f"""
+                    <div class='metric-container'>
+                        <div class='metric-value'>{max_depth}</div>
+                        <div class='metric-label'>Độ sâu tìm kiếm</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with col3:
+                st.markdown("""
+                    <div class='metric-container'>
+                        <div class='metric-value'>ToG-2</div>
+                        <div class='metric-label'>Phương pháp</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            # Create tabs for results and explanation
+            result_tab, process_tab, viz_tab = st.tabs(["Kết quả", "Quá trình suy luận", "Trực quan hóa"])
+            
+            with result_tab:
+                result_container = st.empty()
+            
+            with process_tab:
+                reasoning_container = st.container()
                 steps_placeholder = st.empty()
+            
+            with viz_tab:
+                viz_container = st.empty()
+            
+            # Execute reasoning with real-time updates
+            with st.spinner("Đang thực hiện suy luận..."):
+                # Execute reasoning
+                reasoning_steps, answer = reasoner.iterative_reasoning(query)
                 
+                # Function to update reasoning steps in UI
                 def update_reasoning_steps(steps):
                     with steps_placeholder.container():
                         for i, step in enumerate(steps, 1):
-                            with st.expander(f"Bước {i}: {step['step']}", expanded=True):
-                                st.markdown(step['description'])
-                                
-                                # Display time if present
-                                if 'time' in step:
-                                    st.markdown(f"**Thời gian thực thi:** {step['time']}")
-                                
-                                # Display entities if present
-                                if 'entities' in step:
-                                    st.markdown("**Entities:**")
-                                    entity_names = [kg.entities[eid]['name'] for eid in step['entities'] if eid in kg.entities]
-                                    st.write(", ".join(entity_names))
-                                
-                                # Display relations if present
-                                if 'relations' in step:
-                                    st.markdown("**Relations:**")
-                                    for rel in step['relations']:
-                                        st.write(f"- {rel['entity_name']} → {rel['relation_name']} (Score: {rel['score']:.2f})")
-                                
-                                # Display top sentences if present
-                                if 'top_sentences' in step:
-                                    st.markdown("**Top relevant sentences:**")
-                                    for sent in step['top_sentences']:
-                                        st.write(f"- {sent['text']} (From: {sent['entity_name']}, Score: {sent['score']:.2f})")
-                                
-                                # Display selected entities if present
-                                if 'selected_entities' in step:
-                                    st.markdown("**Selected entities:**")
-                                    st.write(", ".join(step['selected_entities']))
-                                
-                                # Display entity chains if present
-                                if 'entity_chains' in step:
-                                    st.markdown("**Entity chains explored:**")
-                                    for chain in step['entity_chains'][:5]:  # Show top 5 chains
-                                        st.write(f"- {chain[0]} → {chain[1]} → {chain[2]}")
+                            if 'step' in step:
+                                with st.expander(f"Bước {i}: {step['step']}", expanded=True):
+                                    st.markdown(step['description'])
+                                    
+                                    # Display time if present
+                                    if 'time' in step:
+                                        st.markdown(f"**Thời gian thực thi:** {step['time']}")
+                                    
+                                    # Display entities if present
+                                    if 'entities' in step:
+                                        st.markdown("**Entities:**")
+                                        if isinstance(step['entities'], list) and len(step['entities']) > 0:
+                                            if isinstance(step['entities'][0], str):
+                                                entity_names = [kg.entities[eid]['name'] for eid in step['entities'] if eid in kg.entities]
+                                                st.write(", ".join(entity_names))
+                                    
+                                    # Display topic entities if present
+                                    if 'topic_entities' in step:
+                                        st.markdown("**Topic Entities:**")
+                                        entity_names = [kg.entities[eid]['name'] for eid in step['topic_entities'] if eid in kg.entities]
+                                        st.write(", ".join(entity_names))
+                                    
+                                    # Display entity chains if present
+                                    if 'entity_chains' in step:
+                                        st.markdown("**Entity chains explored:**")
+                                        for chain in step['entity_chains'][:5]:  # Show top 5 chains
+                                            st.write(f"- {chain[0]} → {chain[1]} → {chain[2]}")
+                                    
+                                    # Display documents if present
+                                    if 'documents' in step:
+                                        st.markdown("**Top relevant sentences:**")
+                                        sorted_docs = sorted(step['documents'], key=lambda x: x['score'], reverse=True)
+                                        for doc in sorted_docs[:5]:  # Show top 5 docs
+                                            st.write(f"- {doc['text']} (From: {doc['entity_name']}, Score: {doc['score']:.2f})")
+                                            
+                                    # Display answer if present
+                                    if 'answer' in step:
+                                        st.markdown("**Answer:**")
+                                        st.write(step['answer'])
                 
-                # Execute reasoning with step updates
-                reasoning_steps, entity_chains, answer = reasoner.reason(query)
+                # Update reasoning steps
                 update_reasoning_steps(reasoning_steps)
-            
-            # Switch back to results tab when done
-            st.query_params["active_tab"] = "Kết quả"
-        
-        # Update results tab
-        with results_container:
-            st.markdown("### Kết quả")
-            with st.container():
-                st.markdown("""
-                    <div class='results-container'>
-                        <h3>Phương pháp suy luận: {}</h3>
-                        <h4>Câu hỏi:</h4>
-                        <p>{}</p>
-                        <h4>Câu trả lời:</h4>
-                        <p>{}</p>
-                    </div>
-                """.format(
-                    "Embedding-based" if not use_llm else "LLM-enhanced",
-                    query,
-                    answer
-                ), unsafe_allow_html=True)
-        
-        # Update visualization tab
-        with visualization_container:
-            st.markdown("### Đồ thị kiến thức")
-            with st.container():
-                # Get entities to highlight from the final reasoning step
-                highlight_entities = []
-                if entity_chains:
-                    entity_names = set()
-                    for chain in entity_chains:
-                        entity_names.update([chain[0], chain[2]])
-                    
-                    # Map names back to IDs
-                    for entity_id, entity in kg.entities.items():
-                        if entity['name'] in entity_names:
-                            highlight_entities.append(entity_id)
                 
-                st.pyplot(kg.visualize_graph(highlight_entities=highlight_entities))
+                # Get entities to highlight from reasoning steps
+                highlight_entities = []
+                entity_names = set()
+                
+                # Extract entity chains from reasoning steps
+                all_chains = []
+                for step in reasoning_steps:
+                    if 'entity_chains' in step:
+                        all_chains.extend(step['entity_chains'])
+                
+                # Get entity names from chains
+                if all_chains:
+                    for chain in all_chains:
+                        entity_names.update([chain[0], chain[2]])
+                
+                # Map names back to IDs
+                for entity_id, entity in kg.entities.items():
+                    if entity['name'] in entity_names:
+                        highlight_entities.append(entity_id)
+                
+                # Update visualization tab
+                with viz_container:
+                    st.markdown("### Đồ thị kiến thức khám phá")
+                    st.pyplot(kg.visualize_graph(highlight_entities=highlight_entities))
+            
+            # Update results tab
+            with result_container:
+                st.markdown("### Kết quả")
+                with st.container():
+                    st.markdown(f"""
+                        <div class='results-container'>
+                            <h3>Câu hỏi:</h3>
+                            <p>{query}</p>
+                            <h3>Câu trả lời:</h3>
+                            <p>{answer}</p>
+                        </div>
+                    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()

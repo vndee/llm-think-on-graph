@@ -70,87 +70,74 @@ class LLM:
                    self.provider, self.model, self.use_embedding_api)
 
     def get_embeddings(self, texts: Union[str, List[str]]) -> List[List[float]]:
-        """
-        Get embeddings for a text or list of texts using OpenAI or Ollama API.
-        
-        Args:
-            texts: Single text or list of texts to get embeddings for
-            
-        Returns:
-            List of embeddings (each embedding is a list of floats)
-        """
+        """Get embeddings for text(s)"""
         if isinstance(texts, str):
             texts = [texts]
             
         if self.provider == "openai":
-            url = f"{self.api_base}/embeddings"
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": "text-embedding-ada-002",
-                "input": texts
-            }
-            
             try:
-                response = requests.post(url, headers=headers, json=payload)
-                response.raise_for_status()
-                return [item["embedding"] for item in response.json()["data"]]
+                response = self.client.embeddings.create(
+                    model="text-embedding-3-small",
+                    input=texts
+                )
+                return [item.embedding for item in response.data]
             except Exception as e:
                 logger.error(f"Error getting embeddings from OpenAI: {e}")
                 raise
-                
         elif self.provider == "ollama":
+            # Ollama embeddings implementation
             url = f"{self.api_base}/api/embeddings"
-            payload = {
-                "model": self.model,
-                "prompt": texts[0] if len(texts) == 1 else texts
-            }
+            embeddings = []
             
-            try:
-                response = requests.post(url, json=payload)
-                response.raise_for_status()
-                result = response.json()
-                if isinstance(result, list):
-                    return [item["embedding"] for item in result]
-                else:
-                    return [result["embedding"]]
-            except Exception as e:
-                logger.error(f"Error getting embeddings from Ollama: {e}")
-                raise
+            for text in texts:
+                payload = {
+                    "model": self.model,
+                    "prompt": text
+                }
+                
+                try:
+                    response = requests.post(url, json=payload)
+                    response.raise_for_status()
+                    embeddings.append(response.json()["embedding"])
+                except Exception as e:
+                    logger.error(f"Error getting embedding from Ollama: {e}")
+                    raise
+                    
+            return embeddings
         else:
             raise ValueError(f"Unsupported provider for embeddings: {self.provider}")
 
     def compute_similarity(self, query: str, texts: List[str]) -> List[float]:
-        """
-        Compute similarity scores between a query and a list of texts using embeddings.
-        
-        Args:
-            query: Query text
-            texts: List of texts to compare against
+        """Compute similarity scores between query and texts"""
+        if not texts:
+            return []
             
-        Returns:
-            List of similarity scores (0-1)
-        """
-        # Get embeddings for query and texts
+        # Get embeddings
         query_emb = self.get_embeddings(query)[0]
         text_embs = self.get_embeddings(texts)
         
-        # Convert to numpy arrays for efficient computation
+        # Compute cosine similarity
         import numpy as np
         query_emb = np.array(query_emb)
         text_embs = np.array(text_embs)
         
-        # Compute cosine similarity
-        similarities = np.dot(text_embs, query_emb) / (
-            np.linalg.norm(text_embs, axis=1) * np.linalg.norm(query_emb)
-        )
+        # Normalize vectors for cosine similarity
+        query_norm = np.linalg.norm(query_emb)
+        text_norms = np.linalg.norm(text_embs, axis=1)
+        
+        # Avoid division by zero
+        similarities = np.zeros(len(texts))
+        valid_indices = np.where(text_norms > 0)[0]
+        
+        if query_norm > 0 and len(valid_indices) > 0:
+            similarities[valid_indices] = np.dot(text_embs[valid_indices], query_emb) / (
+                text_norms[valid_indices] * query_norm
+            )
         
         return similarities.tolist()
 
-    def _call_openai(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """Call OpenAI API with the given prompt."""
+    def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        """Generate text with the LLM"""
         messages = []
         
         if system_prompt:
@@ -158,100 +145,151 @@ class LLM:
             
         messages.append({"role": "user", "content": prompt})
         
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Error calling OpenAI API: {e}")
-            return f"Error: {str(e)}"
-    
-    def _call_ollama(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """Call Ollama API with the given prompt."""
-        url = f"{self.api_base}/generate"
-        
-        payload = {
-            "model": self.model,
-            "prompt": prompt,
-            "stream": False,
-            "temperature": self.temperature,
-        }
-        
-        if system_prompt:
-            payload["system"] = system_prompt
-            
-        try:
-            response = requests.post(url, json=payload)
-            response.raise_for_status()
-            return response.json().get("response", "")
-        except Exception as e:
-            logger.error(f"Error calling Ollama API: {e}")
-            return f"Error: {str(e)}"
-    
-    def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """Generate text from the LLM with the given prompt."""
         if self.provider == "openai":
-            return self._call_openai(prompt, system_prompt)
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.error(f"Error calling OpenAI API: {e}")
+                return f"Error: {str(e)}"
         elif self.provider == "ollama":
-            return self._call_ollama(prompt, system_prompt)
+            url = f"{self.api_base}/api/generate"
+            
+            payload = {
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False,
+                "temperature": self.temperature,
+            }
+            
+            if system_prompt:
+                payload["system"] = system_prompt
+                
+            try:
+                response = requests.post(url, json=payload)
+                response.raise_for_status()
+                return response.json().get("response", "")
+            except Exception as e:
+                logger.error(f"Error calling Ollama API: {e}")
+                return f"Error: {str(e)}"
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
     
     def identify_entities(self, query: str, entity_names: List[str]) -> List[str]:
-        """
-        Identify potential entities from the query using LLM.
-        Returns the names of entities identified in the query.
-        """
-        prompt = ENTITY_RECOGNITION_PROMPT.format(
-            query=query,
-            entity_names=', '.join(entity_names)
-        )
+        """Identify entities in the query using LLM"""
+        # Format entity_names for the prompt
+        if len(entity_names) > 100:
+            # If too many entities, select a subset that might be relevant
+            import re
+            # Extract words from the query (non-stopwords)
+            query_words = set(re.findall(r'\b\w+\b', query.lower()))
+            stopwords = {'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'with', 'about', 'by'}
+            query_words = query_words - stopwords
+            
+            # Filter entities that might be relevant to the query
+            filtered_entities = []
+            for entity in entity_names:
+                entity_lower = entity.lower()
+                # Check if any query word appears in the entity name
+                if any(word in entity_lower for word in query_words):
+                    filtered_entities.append(entity)
+                    
+            # If we still have too many, take the first 100
+            if len(filtered_entities) > 100:
+                entity_names_str = ', '.join(filtered_entities[:100])
+            else:
+                entity_names_str = ', '.join(filtered_entities)
+        else:
+            entity_names_str = ', '.join(entity_names)
         
-        result = self.generate(prompt, ENTITY_RECOGNITION_SYSTEM_PROMPT)
+        prompt = f"""
+        Query: {query}
+
+        Available entities: {entity_names_str}
+
+        List only the entities that are directly mentioned or clearly referenced in the query. Return them as a comma-separated list.
+        """
+        
+        system_prompt = """
+        You are an entity linker that identifies entities mentioned in queries. Extract only the entities that exist in the provided list of entity names.
+        """
+        
+        result = self.generate(prompt, system_prompt)
         
         # Parse the result - expecting a comma-separated list of entity names
         entities = [name.strip() for name in result.split(',') if name.strip()]
         return entities
     
     def rank_relations(self, query: str, entity_name: str, relations: List[Dict]) -> List[Dict]:
-        """
-        Rank a list of potential relations by their relevance to the query.
-        Returns the ranked relations with scores.
-        """
+        """Rank relations by their relevance to the query"""
+        if not relations:
+            return []
+            
         relation_info = '\n'.join([f"- {rel['relation_name']} (connects {entity_name} to other entities)" for rel in relations])
         
-        prompt = RELATION_RANKING_PROMPT.format(
-            query=query,
-            entity_name=entity_name,
-            relation_info=relation_info
-        )
+        prompt = f"""
+        Query: {query}
+
+        Entity: {entity_name}
+
+        Available relations:
+        {relation_info}
+
+        Rank the relations above by how relevant they are for answering the query about {entity_name}.
+        For each relation, provide a score from 0 to 10, where:
+        - 0 means completely irrelevant
+        - 10 means highly relevant to answering the query
+
+        Return a JSON array in this format:
+        [
+          {{"relation_name": "relation1", "score": score1}},
+          {{"relation_name": "relation2", "score": score2}},
+          ...
+        ]
+        """
         
-        result = self.generate(prompt, RELATION_RANKING_SYSTEM_PROMPT)
+        system_prompt = """
+        You are a knowledge graph relation ranker that helps identify which relations are most relevant to answering a query.
+        """
+        
+        result = self.generate(prompt, system_prompt)
         
         # Extract JSON from the response
         try:
             # Try to find JSON by looking for array notation
-            json_str = result[result.find('['):result.rfind(']')+1]
-            ranked_relations = json.loads(json_str)
+            import re
+            import json
             
-            # Match the ranked relations back to the original relations data
-            enriched_relations = []
-            for ranked in ranked_relations:
-                for original in relations:
-                    if ranked['relation_name'] == original['relation_name']:
-                        # Normalize score to 0-1 range
-                        enriched = {**original, 'score': ranked['score'] / 10.0}
-                        enriched_relations.append(enriched)
-                        break
-                        
-            # Sort by score in descending order
-            enriched_relations.sort(key=lambda x: x['score'], reverse=True)
-            return enriched_relations
-            
+            json_match = re.search(r'\[.*\]', result, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                ranked_relations = json.loads(json_str)
+                
+                # Match the ranked relations back to the original relations data
+                enriched_relations = []
+                for ranked in ranked_relations:
+                    for original in relations:
+                        if ranked['relation_name'] == original['relation_name']:
+                            # Normalize score to 0-1 range
+                            enriched = {**original, 'score': ranked['score'] / 10.0}
+                            enriched_relations.append(enriched)
+                            break
+                            
+                # Sort by score in descending order
+                enriched_relations.sort(key=lambda x: x['score'], reverse=True)
+                return enriched_relations
+            else:
+                logger.error("Could not find JSON array in response")
+                # Fallback
+                for i, rel in enumerate(relations):
+                    rel['score'] = (len(relations) - i) / len(relations)
+                return relations
+                
         except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"Error parsing relation ranking: {e}")
             # Fallback - just assign scores based on position in the list
@@ -259,17 +297,15 @@ class LLM:
                 rel['score'] = (len(relations) - i) / len(relations)
             return relations
     
-    def generate_answer(self, query: str, sentences: List[Dict], entity_chains: List[Tuple]) -> str:
-        """
-        Generate a comprehensive answer based on the query, relevant sentences, and entity chains.
-        """
-        # Format the sentences for the prompt
-        formatted_sentences = ""
-        if sentences:
+    def generate_answer(self, query: str, contexts: List[Dict], entity_chains: List[Tuple]) -> str:
+        """Generate answer based on contexts and entity chains"""
+        # Format the contexts for the prompt
+        formatted_contexts = ""
+        if contexts:
             # Sort by relevance
-            sorted_sentences = sorted(sentences, key=lambda x: x['score'], reverse=True)
-            for i, sent in enumerate(sorted_sentences[:10]):  # Use top 10 sentences
-                formatted_sentences += f"{i+1}. \"{sent['text']}\" (Source: {sent['entity_name']}, Relevance: {sent['score']:.2f})\n"
+            sorted_contexts = sorted(contexts, key=lambda x: x.get('score', 0), reverse=True)
+            for i, ctx in enumerate(sorted_contexts[:10]):  # Use top 10 contexts
+                formatted_contexts += f"{i+1}. \"{ctx['text']}\" (Source: {ctx.get('entity_name', 'Unknown')})\n"
         
         # Format the entity chains
         formatted_chains = ""
@@ -277,37 +313,22 @@ class LLM:
             for i, chain in enumerate(entity_chains[:5]):  # Use top 5 chains
                 formatted_chains += f"{i+1}. {chain[0]} → {chain[1]} → {chain[2]}\n"
         
-        prompt = ANSWER_GENERATION_PROMPT.format(
-            query=query,
-            formatted_sentences=formatted_sentences,
-            formatted_chains=formatted_chains
-        )
-        
-        return self.generate(prompt, ANSWER_GENERATION_SYSTEM_PROMPT)
-    
-    def analyze_entity_context(self, query: str, entity_name: str, context: str) -> float:
+        prompt = f"""
+        Answer the following query based ONLY on the information provided in the context snippets and entity chains.
+
+        Query: {query}
+
+        Relevant context snippets:
+        {formatted_contexts}
+
+        Entity connections:
+        {formatted_chains}
+
+        Provide a comprehensive, accurate answer using only the information above. If the information is insufficient to fully answer the query, clearly state what remains unknown.
         """
-        Analyze how relevant an entity's context is to the query.
-        Returns a relevance score between 0 and 1.
+        
+        system_prompt = """
+        You are a helpful assistant that provides accurate, comprehensive answers based on the provided information.
         """
-        prompt = CONTEXT_ANALYSIS_PROMPT.format(
-            query=query,
-            entity_name=entity_name,
-            context=context
-        )
         
-        result = self.generate(prompt, CONTEXT_ANALYSIS_SYSTEM_PROMPT)
-        
-        # Extract the numeric score
-        try:
-            # Find any number in the response
-            import re
-            match = re.search(r'\b(\d+(\.\d+)?)\b', result)
-            if match:
-                score = float(match.group(1))
-                # Normalize to 0-1 range
-                return min(score / 10.0, 1.0)
-            else:
-                return 0.5  # Default mid-value if no score found
-        except ValueError:
-            return 0.5  # Default mid-value
+        return self.generate(prompt, system_prompt)
