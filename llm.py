@@ -9,10 +9,10 @@ from const import (
     ENTITY_RECOGNITION_PROMPT,
     RELATION_RANKING_SYSTEM_PROMPT,
     RELATION_RANKING_PROMPT,
-    ANSWER_GENERATION_SYSTEM_PROMPT,
-    ANSWER_GENERATION_PROMPT,
-    CONTEXT_ANALYSIS_SYSTEM_PROMPT,
-    CONTEXT_ANALYSIS_PROMPT,
+    SIMPLE_ANSWER_PROMPT,
+    SIMPLE_ANSWER_SYSTEM_PROMPT,
+    FALLBACK_ANSWER_TEMPLATE,
+    FALLBACK_ANSWER_NO_INFO,
 )
 
 logger = logging.getLogger(__name__)
@@ -206,24 +206,72 @@ class LLM:
                 entity_names_str = ', '.join(filtered_entities)
         else:
             entity_names_str = ', '.join(entity_names)
-        
-        prompt = f"""
-        Query: {query}
 
-        Available entities: {entity_names_str}
-
-        List only the entities that are directly mentioned or clearly referenced in the query. Return them as a comma-separated list.
-        """
-        
-        system_prompt = """
-        You are an entity linker that identifies entities mentioned in queries. Extract only the entities that exist in the provided list of entity names.
-        """
-        
-        result = self.generate(prompt, system_prompt)
-        
-        # Parse the result - expecting a comma-separated list of entity names
-        entities = [name.strip() for name in result.split(',') if name.strip()]
-        return entities
+        try:
+            # Use the improved prompt from const.py
+            prompt = ENTITY_RECOGNITION_PROMPT.format(
+                query=query,
+                entity_names=entity_names_str
+            )
+            
+            # Log the prompt for debugging
+            logger.debug(f"Entity recognition prompt: {prompt}")
+            
+            result = self.generate(prompt, ENTITY_RECOGNITION_SYSTEM_PROMPT)
+            
+            # Log the result for debugging
+            logger.debug(f"Entity recognition result: {result}")
+            
+            # Try to extract JSON from the response
+            import re
+            import json
+            
+            # First, try direct JSON parsing
+            try:
+                entities_data = json.loads(result)
+                logger.info("Successfully parsed entity JSON response")
+                # Extract entities with high confidence (> 0.7)
+                return [item['entity'] for item in entities_data if item['confidence'] > 0.7]
+            except json.JSONDecodeError:
+                # Try to extract JSON array pattern from the text
+                json_match = re.search(r'\[\s*\{.*\}\s*\]', result, re.DOTALL)
+                if json_match:
+                    try:
+                        json_str = json_match.group(0)
+                        entities_data = json.loads(json_str)
+                        logger.info("Successfully extracted and parsed entity JSON from response")
+                        return [item['entity'] for item in entities_data if item['confidence'] > 0.7]
+                    except (json.JSONDecodeError, KeyError) as e:
+                        logger.warning(f"Failed to parse extracted JSON: {e}")
+                
+                # If JSON parsing fails, fallback to simple text extraction
+                # Check for entity names directly in the text
+                found_entities = []
+                for name in entity_names:
+                    if name.lower() in result.lower():
+                        found_entities.append(name)
+                
+                if found_entities:
+                    logger.info(f"Extracted entities by name matching in response: {found_entities}")
+                    return found_entities
+                
+                # Last resort: look for quotes which might contain entity names
+                quoted_entities = re.findall(r'"([^"]*)"', result)
+                valid_entities = [e for e in quoted_entities if e in entity_names]
+                
+                if valid_entities:
+                    logger.info(f"Extracted entities from quotes in response: {valid_entities}")
+                    return valid_entities
+                
+                # If all else fails, fall back to comma-separated parsing
+                logger.warning("All JSON parsing methods failed, falling back to comma-separated parsing")
+                entities = [name.strip() for name in result.split(',') if name.strip() and name.strip() in entity_names]
+                return entities
+                
+        except Exception as e:
+            logger.error(f"Error in entity identification: {e}")
+            # Emergency fallback - simple text matching
+            return [name for name in entity_names if name.lower() in query.lower()]
     
     def rank_relations(self, query: str, entity_name: str, relations: List[Dict]) -> List[Dict]:
         """Rank relations by their relevance to the query"""
@@ -232,67 +280,82 @@ class LLM:
             
         relation_info = '\n'.join([f"- {rel['relation_name']} (connects {entity_name} to other entities)" for rel in relations])
         
-        prompt = f"""
-        Query: {query}
-
-        Entity: {entity_name}
-
-        Available relations:
-        {relation_info}
-
-        Rank the relations above by how relevant they are for answering the query about {entity_name}.
-        For each relation, provide a score from 0 to 10, where:
-        - 0 means completely irrelevant
-        - 10 means highly relevant to answering the query
-
-        Return a JSON array in this format:
-        [
-          {{"relation_name": "relation1", "score": score1}},
-          {{"relation_name": "relation2", "score": score2}},
-          ...
-        ]
-        """
-        
-        system_prompt = """
-        You are a knowledge graph relation ranker that helps identify which relations are most relevant to answering a query.
-        """
-        
-        result = self.generate(prompt, system_prompt)
-        
-        # Extract JSON from the response
         try:
-            # Try to find JSON by looking for array notation
+            # Use the improved prompt from const.py
+            prompt = RELATION_RANKING_PROMPT.format(
+                query=query,
+                entity_name=entity_name,
+                relation_info=relation_info
+            )
+            
+            # Log the prompt for debugging
+            logger.debug(f"Relation ranking prompt: {prompt}")
+            
+            result = self.generate(prompt, RELATION_RANKING_SYSTEM_PROMPT)
+            
+            # Log the result for debugging
+            logger.debug(f"Relation ranking result: {result}")
+            
+            # Try to extract JSON from the response
             import re
             import json
             
-            json_match = re.search(r'\[.*\]', result, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(0)
-                ranked_relations = json.loads(json_str)
-                
-                # Match the ranked relations back to the original relations data
-                enriched_relations = []
-                for ranked in ranked_relations:
-                    for original in relations:
-                        if ranked['relation_name'] == original['relation_name']:
-                            # Normalize score to 0-1 range
-                            enriched = {**original, 'score': ranked['score'] / 10.0}
-                            enriched_relations.append(enriched)
-                            break
+            # First, try direct JSON parsing
+            try:
+                ranked_relations = json.loads(result)
+                logger.info("Successfully parsed relation ranking JSON response")
+            except json.JSONDecodeError:
+                # Try to extract JSON array pattern from the text
+                json_match = re.search(r'\[\s*\{.*\}\s*\]', result, re.DOTALL)
+                if json_match:
+                    try:
+                        json_str = json_match.group(0)
+                        ranked_relations = json.loads(json_str)
+                        logger.info("Successfully extracted and parsed relation JSON from response")
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse extracted relation JSON: {e}")
+                        # Fallback to simpler format that might be present
+                        simple_match = re.findall(r'"?relation_name"?\s*:\s*"([^"]+)".*?"?score"?\s*:\s*(\d+(?:\.\d+)?)', result)
+                        if simple_match:
+                            ranked_relations = [{"relation_name": name, "score": float(score)} for name, score in simple_match]
+                            logger.info("Extracted relation rankings using regex patterns")
+                        else:
+                            raise ValueError("Could not extract any valid relation rankings")
+                else:
+                    raise ValueError("No JSON array pattern found in response")
+            
+            # Match the ranked relations back to the original relations data
+            enriched_relations = []
+            for ranked in ranked_relations:
+                for original in relations:
+                    if ranked['relation_name'] == original['relation_name']:
+                        # Check if we have the new format with multiple scores
+                        if 'query_relevance' in ranked:
+                            # Calculate weighted average score
+                            total_score = (
+                                ranked.get('query_relevance', 0) + 
+                                ranked.get('reasoning_potential', 0) + 
+                                ranked.get('information_completeness', 0)
+                            ) / 30.0  # Normalize to 0-1 range
+                        else:
+                            # Old format with single score
+                            total_score = float(ranked.get('score', 0)) / 10.0
                             
-                # Sort by score in descending order
-                enriched_relations.sort(key=lambda x: x['score'], reverse=True)
-                return enriched_relations
-            else:
-                logger.error("Could not find JSON array in response")
-                # Fallback
-                for i, rel in enumerate(relations):
-                    rel['score'] = (len(relations) - i) / len(relations)
-                return relations
+                        enriched = {
+                            **original,
+                            'score': total_score,
+                            'reasoning_path': ranked.get('reasoning_path', '')
+                        }
+                        enriched_relations.append(enriched)
+                        break
+                    
+            # Sort by score in descending order
+            enriched_relations.sort(key=lambda x: x['score'], reverse=True)
+            return enriched_relations
                 
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.error(f"Error parsing relation ranking: {e}")
-            # Fallback - just assign scores based on position in the list
+        except Exception as e:
+            logger.error(f"Error in relation ranking: {e}")
+            # Fallback - assign scores based on position
             for i, rel in enumerate(relations):
                 rel['score'] = (len(relations) - i) / len(relations)
             return relations
@@ -300,12 +363,12 @@ class LLM:
     def generate_answer(self, query: str, contexts: List[Dict], entity_chains: List[Tuple]) -> str:
         """Generate answer based on contexts and entity chains"""
         # Format the contexts for the prompt
-        formatted_contexts = ""
+        formatted_sentences = ""
         if contexts:
             # Sort by relevance
             sorted_contexts = sorted(contexts, key=lambda x: x.get('score', 0), reverse=True)
             for i, ctx in enumerate(sorted_contexts[:10]):  # Use top 10 contexts
-                formatted_contexts += f"{i+1}. \"{ctx['text']}\" (Source: {ctx.get('entity_name', 'Unknown')})\n"
+                formatted_sentences += f"{i+1}. \"{ctx['text']}\" (Source: {ctx.get('entity_name', 'Unknown')})\n"
         
         # Format the entity chains
         formatted_chains = ""
@@ -313,22 +376,36 @@ class LLM:
             for i, chain in enumerate(entity_chains[:5]):  # Use top 5 chains
                 formatted_chains += f"{i+1}. {chain[0]} → {chain[1]} → {chain[2]}\n"
         
-        prompt = f"""
-        Answer the following query based ONLY on the information provided in the context snippets and entity chains.
-
-        Query: {query}
-
-        Relevant context snippets:
-        {formatted_contexts}
-
-        Entity connections:
-        {formatted_chains}
-
-        Provide a comprehensive, accurate answer using only the information above. If the information is insufficient to fully answer the query, clearly state what remains unknown.
-        """
-        
-        system_prompt = """
-        You are a helpful assistant that provides accurate, comprehensive answers based on the provided information.
-        """
-        
-        return self.generate(prompt, system_prompt)
+        try:
+            # Use the simplified prompt from const.py
+            prompt = SIMPLE_ANSWER_PROMPT.format(
+                query=query,
+                formatted_sentences=formatted_sentences,
+                formatted_chains=formatted_chains
+            )
+            
+            # Log the full prompt and result for debugging
+            logger.debug(f"Answer generation prompt: {prompt}")
+            
+            result = self.generate(prompt, SIMPLE_ANSWER_SYSTEM_PROMPT)
+            
+            logger.debug(f"Answer generation result: {result}")
+            
+            # Simply return the result as is - it's already in plain text format
+            return result
+                
+        except Exception as e:
+            logger.error(f"Error in answer generation: {str(e)}")
+            # Log the error details for debugging
+            import traceback
+            logger.debug(f"Error details: {traceback.format_exc()}")
+            
+            # Emergency fallback - return a simple answer from the top contexts
+            if contexts:
+                top_contexts = sorted(contexts, key=lambda x: x.get('score', 0), reverse=True)[:3]
+                contexts_text = ""
+                for i, ctx in enumerate(top_contexts):
+                    contexts_text += f"{i+1}. {ctx['text']} (từ {ctx['entity_name']})\n"
+                return FALLBACK_ANSWER_TEMPLATE.format(contexts=contexts_text)
+            else:
+                return FALLBACK_ANSWER_NO_INFO

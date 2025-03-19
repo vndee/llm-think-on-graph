@@ -39,16 +39,6 @@ st.set_page_config(
 # Load custom CSS
 load_css()
 
-# Add custom header
-# st.markdown("""
-#     <div style='text-align: center; padding: 2rem 0;'>
-#         <h1>Think-on-Graph 2.0 Demo</h1>
-#         <p style='font-size: 1.2rem; color: #666;'>
-#             Kết hợp Knowledge Graph và LLM cho suy luận đa bước
-#         </p>
-#     </div>
-# """, unsafe_allow_html=True)
-
 # Cache model sentence transformer để tính cosine similarity
 @st.cache_resource
 def load_model():
@@ -279,7 +269,7 @@ class KnowledgeGraph:
     
     def visualize_graph(self, highlight_entities=None, max_nodes=50):
         """Visualize the knowledge graph using NetworkX and Matplotlib"""
-        plt.figure(figsize=(10, 8))
+        plt.figure(figsize=(12, 8))
         
         # Create a subgraph if highlight_entities is provided
         if highlight_entities:
@@ -324,23 +314,29 @@ class KnowledgeGraph:
             else:
                 G = self.graph.copy()
         
-        # Define node colors based on type and highlight status
+        # Define node colors and sizes based on type and highlight status
         node_colors = []
+        node_sizes = []
         for node in G.nodes():
+            # Base size for all nodes
+            base_size = 2000
+            
             if highlight_entities and node in highlight_entities:
-                node_colors.append('red')  # Highlighted nodes
+                node_colors.append('#FF4B4B')  # Bright red for highlighted nodes
+                node_sizes.append(base_size * 1.5)  # 50% larger for highlighted nodes
             else:
                 node_type = G.nodes[node].get('type', '')
                 if node_type == 'Person':
-                    node_colors.append('skyblue')
+                    node_colors.append('#64B5F6')  # Material Blue
                 elif node_type == 'Organization':
-                    node_colors.append('lightgreen')
+                    node_colors.append('#81C784')  # Material Green
                 elif node_type == 'Location':
-                    node_colors.append('orange')
+                    node_colors.append('#FFB74D')  # Material Orange
                 elif node_type == 'Work':
-                    node_colors.append('gold')
+                    node_colors.append('#FFD54F')  # Material Amber
                 else:
-                    node_colors.append('lightgray')
+                    node_colors.append('#E0E0E0')  # Material Grey
+                node_sizes.append(base_size)
         
         # Get node labels
         node_labels = {node: G.nodes[node]['label'] for node in G.nodes()}
@@ -348,16 +344,63 @@ class KnowledgeGraph:
         # Get edge labels
         edge_labels = {(u, v): G.edges[u, v]['label'] for u, v in G.edges()}
         
-        # Draw the graph with a deterministic layout
-        pos = nx.spring_layout(G, seed=42)
-        nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=500, alpha=0.8)
-        nx.draw_networkx_edges(G, pos, width=1.0, arrowsize=15)
-        nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=10)
+        # Use kamada_kawai_layout for better node distribution
+        pos = nx.kamada_kawai_layout(G, scale=2.0)
         
-        # Draw edge labels with smaller font
-        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=8)
+        # Draw edges with curved arrows
+        nx.draw_networkx_edges(
+            G, pos,
+            edge_color='#BDBDBD',
+            width=1.0,
+            alpha=0.6,
+            arrowsize=20,
+            arrowstyle='->',
+            connectionstyle='arc3,rad=0.2'
+        )
+        
+        # Draw nodes
+        nx.draw_networkx_nodes(
+            G, pos,
+            node_color=node_colors,
+            node_size=node_sizes,
+            alpha=0.9,
+            edgecolors='white',
+            linewidths=2
+        )
+        
+        # Draw node labels with white background for better visibility
+        for node, (x, y) in pos.items():
+            plt.text(
+                x, y,
+                node_labels[node],
+                fontsize=10,
+                ha='center',
+                va='center',
+                bbox=dict(
+                    facecolor='white',
+                    edgecolor='none',
+                    alpha=0.7,
+                    pad=2.0
+                )
+            )
+        
+        # Draw edge labels with white background
+        nx.draw_networkx_edge_labels(
+            G, pos,
+            edge_labels=edge_labels,
+            font_size=8,
+            bbox=dict(
+                facecolor='white',
+                edgecolor='none',
+                alpha=0.7,
+                pad=1.0
+            ),
+            label_pos=0.5,
+            rotate=False
+        )
         
         plt.axis('off')
+        plt.tight_layout()
         return plt
     
 

@@ -38,5 +38,25 @@
     {
       "id": "R10",
       "name": "là_thành_viên"
+    },
+    {
+      "id": "R11",
+      "name": "được_chuyển_thể"
+    },
+    {
+      "id": "R12",
+      "name": "theo_trường_phái"
+    },
+    {
+      "id": "R13",
+      "name": "cộng_tác_với"
+    },
+    {
+      "id": "R14",
+      "name": "được_dịch_sang"
+    },
+    {
+      "id": "R15",
+      "name": "được_phổ_nhạc"
     }
-  ]
+]

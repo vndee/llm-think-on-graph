@@ -251,42 +251,102 @@
     },
     {
       "id": "E51",
-      "name": "Văn học dân gian",
-      "type": "Thể loại"
+      "name": "Văn học Pháp",
+      "type": "Nguồn ảnh hưởng"
     },
     {
       "id": "E52",
-      "name": "Văn học cách mạng",
-      "type": "Thể loại"
+      "name": "Văn học dân gian",
+      "type": "Nguồn ảnh hưởng"
     },
     {
       "id": "E53",
-      "name": "Văn học thiếu nhi",
-      "type": "Thể loại"
+      "name": "Phim điện ảnh",
+      "type": "Hình thức chuyển thể"
     },
     {
       "id": "E54",
-      "name": "Văn học hiện đại Pháp",
-      "type": "Văn học nước ngoài"
+      "name": "Kịch sân khấu",
+      "type": "Hình thức chuyển thể"
     },
     {
       "id": "E55",
-      "name": "Văn học Nga Xô viết",
-      "type": "Văn học nước ngoài"
+      "name": "Tiếng Anh",
+      "type": "Ngôn ngữ"
     },
     {
       "id": "E56",
-      "name": "Văn học Trung Quốc",
-      "type": "Văn học nước ngoài"
+      "name": "Tiếng Pháp",
+      "type": "Ngôn ngữ"
     },
     {
       "id": "E57",
-      "name": "Văn học Nhật Bản",
-      "type": "Văn học nước ngoài"
+      "name": "Nhạc phẩm",
+      "type": "Hình thức chuyển thể"
     },
     {
       "id": "E58",
-      "name": "Văn học Mỹ",
-      "type": "Văn học nước ngoài"
+      "name": "Trịnh Công Sơn",
+      "type": "Nhạc sĩ"
+    },
+    {
+      "id": "E59",
+      "name": "Phạm Duy",
+      "type": "Nhạc sĩ"
+    },
+    {
+      "id": "E60",
+      "name": "Văn Cao",
+      "type": "Nhạc sĩ"
+    },
+    {
+      "id": "E61",
+      "name": "Victor Hugo",
+      "type": "Tác giả"
+    },
+    {
+      "id": "E62",
+      "name": "Albert Camus",
+      "type": "Tác giả"
+    },
+    {
+      "id": "E63",
+      "name": "Nguyễn Huy Tưởng",
+      "type": "Tác giả"
+    },
+    {
+      "id": "E64",
+      "name": "An Thuyên",
+      "type": "Nhạc sĩ"
+    },
+    {
+      "id": "E65",
+      "name": "Giải thưởng Nhà nước",
+      "type": "Giải thưởng"
+    },
+    {
+      "id": "E66",
+      "name": "Trường phái siêu thực",
+      "type": "Trường phái"
+    },
+    {
+      "id": "E67",
+      "name": "Trường phái tượng trưng",
+      "type": "Trường phái"
+    },
+    {
+      "id": "E68",
+      "name": "Trường phái lãng mạn",
+      "type": "Trường phái"
+    },
+    {
+      "id": "E69",
+      "name": "Trường phái hiện thực",
+      "type": "Trường phái"
+    },
+    {
+      "id": "E70",
+      "name": "Đài truyền hình",
+      "type": "Hình thức chuyển thể"
     }
   ]

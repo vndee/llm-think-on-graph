@@ -3,27 +3,74 @@
         {
             "id": "q1",
             "text": "Những tác phẩm nào của Nguyễn Nhật Ánh đã được chuyển thể thành phim?",
-            "description": "Tìm các tác phẩm của Nguyễn Nhật Ánh đã được chuyển thể thành phim"
+            "description": "Tìm các tác phẩm của Nguyễn Nhật Ánh đã được chuyển thể thành phim",
+            "complexity": "Thấp - Tìm tác phẩm của một tác giả và hình thức chuyển thể"
         },
         {
             "id": "q2",
             "text": "Những tác giả nào chịu ảnh hưởng từ văn học Pháp?",
-            "description": "Tìm các tác giả chịu ảnh hưởng từ văn học Pháp"
+            "description": "Tìm các tác giả chịu ảnh hưởng từ văn học Pháp",
+            "complexity": "Thấp - Chỉ cần tìm một mối quan hệ"
         },
         {
             "id": "q3",
             "text": "Những tác phẩm văn học thiếu nhi nào đã đạt giải thưởng?",
-            "description": "Tìm các tác phẩm văn học thiếu nhi đã đạt giải thưởng"
+            "description": "Tìm các tác phẩm văn học thiếu nhi đã đạt giải thưởng",
+            "complexity": "Trung bình - Kết hợp thể loại và giải thưởng"
         },
         {
             "id": "q4",
             "text": "Những tác phẩm nào của các tác giả chịu ảnh hưởng từ văn học dân gian?",
-            "description": "Tìm các tác phẩm của các tác giả chịu ảnh hưởng từ văn học dân gian"
+            "description": "Tìm các tác phẩm của các tác giả chịu ảnh hưởng từ văn học dân gian",
+            "complexity": "Trung bình - Tìm tác giả theo ảnh hưởng rồi tìm tác phẩm"
         },
         {
             "id": "q5",
             "text": "Những tác giả nào vừa chịu ảnh hưởng từ văn học Pháp vừa đạt giải thưởng?",
-            "description": "Tìm các tác giả chịu ảnh hưởng từ văn học Pháp và đã đạt giải thưởng"
+            "description": "Tìm các tác giả chịu ảnh hưởng từ văn học Pháp và đã đạt giải thưởng",
+            "complexity": "Trung bình - Kết hợp hai điều kiện về ảnh hưởng và giải thưởng"
+        },
+        {
+            "id": "q6",
+            "text": "Các tác giả cùng thời với Nam Cao đã sáng tác những tác phẩm nào theo trường phái hiện thực?",
+            "description": "Tìm các tác phẩm hiện thực của các tác giả cùng thời với Nam Cao, đòi hỏi kết nối thời kỳ, tác giả và trường phái",
+            "complexity": "Cao - Yêu cầu xác định thời kỳ, tìm tác giả cùng thời và lọc theo trường phái"
+        },
+        {
+            "id": "q7",
+            "text": "Những tác giả nào là thành viên Tự lực văn đoàn và có tác phẩm được chuyển thể thành phim?",
+            "description": "Tìm giao điểm giữa thành viên Tự lực văn đoàn và việc có tác phẩm được chuyển thể",
+            "complexity": "Cao - Kết hợp điều kiện về tổ chức và hình thức chuyển thể"
+        },
+        {
+            "id": "q8",
+            "text": "Các tác phẩm thơ tình của những tác giả chịu ảnh hưởng từ chủ nghĩa lãng mạn Pháp đã đạt giải thưởng gì?",
+            "description": "Kết hợp nhiều điều kiện: thể loại thơ tình, ảnh hưởng từ chủ nghĩa lãng mạn Pháp và giải thưởng",
+            "complexity": "Cao - Cần tìm mối liên hệ giữa tác giả, trường phái, thể loại và giải thưởng"
+        },
+        {
+            "id": "q9",
+            "text": "Những tác giả nào sinh ra ở miền Trung, chịu ảnh hưởng văn học dân gian và có tác phẩm đạt giải thưởng văn học ASEAN?",
+            "description": "Kết hợp địa điểm sinh, ảnh hưởng văn học và giải thưởng cụ thể",
+            "complexity": "Cao - Yêu cầu kết hợp 3 điều kiện: nơi sinh, nguồn ảnh hưởng và giải thưởng"
+        },
+        {
+            "id": "q10",
+            "text": "Các tác phẩm của Xuân Diệu có ảnh hưởng đến những tác giả nào và họ đã sáng tác những tác phẩm gì theo thể loại thơ tình?",
+            "description": "Tìm mối quan hệ ảnh hưởng giữa các tác giả và tác phẩm theo thể loại",
+            "complexity": "Cao - Yêu cầu tìm chuỗi ảnh hưởng và lọc theo thể loại"
+        },
+        {
+            "id": "q11",
+            "text": "Những tác giả nào vừa sáng tác thơ vừa sáng tác truyện ngắn và có tác phẩm được dựng thành kịch?",
+            "description": "Tìm tác giả đa năng với nhiều thể loại sáng tác khác nhau",
+            "complexity": "Cao - Kết hợp nhiều thể loại sáng tác và hình thức chuyển thể"
+        },
+        {
+            "id": "q12",
+            "text": "Các tác phẩm văn học hiện đại có bối cảnh tại Hà Nội đã được chuyển thể thành phim và đạt giải thưởng?",
+            "description": "Kết hợp thời kỳ, bối cảnh, chuyển thể và giải thưởng",
+            "complexity": "Cao - Yêu cầu kết hợp thời kỳ, bối cảnh, hình thức chuyển thể và giải thưởng"
         }
     ]
 } 
