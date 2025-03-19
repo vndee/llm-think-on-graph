@@ -1,9 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "llm-thinking-on-graph"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "A demonstration of the ToG-2 approach for multi-step reasoning using Knowledge Graphs and LLMs"
 readme = "README.md"
 requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [
+    {name = "vndee", email = "vndee@example.com"},
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "matplotlib>=3.10.1",
     "networkx>=3.4.2",
@@ -14,4 +27,18 @@ dependencies = [
     "sentence-transformers>=3.4.1",
     "streamlit>=1.43.2",
     "torch>=2.6.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/yourusername/llm-thinking-on-graph"
+"Bug Tracker" = "https://github.com/yourusername/llm-thinking-on-graph/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["llm_thinking_on_graph"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "llm_thinking_on_graph",
+    "README.md",
+    "LICENSE",
 ]

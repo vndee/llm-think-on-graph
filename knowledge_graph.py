@@ -11,13 +11,14 @@ import torch
 logger = logging.getLogger(__name__)
 
 class KnowledgeGraph:
-    def __init__(self):
+    def __init__(self, model: Optional[SentenceTransformer] = None):
         self.entities = {}  # id -> entity
         self.relations = {}  # id -> relation
         self.triples = []   # list of (head, relation, tail)
         self.documents = {}  # entity_id -> document
         self.graph = nx.DiGraph()
         self.llm = None  # LLM instance for embedding computation
+        self.model = model  # SentenceTransformer model
         
     def set_llm(self, llm):
         """Set LLM instance for embedding computation"""
@@ -124,7 +125,10 @@ class KnowledgeGraph:
                 logger.error(f"Error in LLM relation ranking: {e}")
         
         # Get model for fallback embedding calculation
-        model = SentenceTransformer('all-MiniLM-L6-v2')
+        model = self.model
+        if model is None:
+            logger.info("No pre-loaded model provided, creating a new SentenceTransformer instance")
+            model = SentenceTransformer('all-MiniLM-L6-v2')
         
         # Fallback to embedding-based ranking
         relation_names = [f"{cand['relation_name']} connects {cand['entity_name']} to {cand['target_name']}" for cand in candidates]
@@ -174,7 +178,10 @@ class KnowledgeGraph:
         results = []
         
         # Get model for embedding calculation
-        model = SentenceTransformer('all-MiniLM-L6-v2')
+        model = self.model
+        if model is None:
+            logger.info("No pre-loaded model provided, creating a new SentenceTransformer instance")
+            model = SentenceTransformer('all-MiniLM-L6-v2')
         
         # Prepare for document search
         all_sentences = []
