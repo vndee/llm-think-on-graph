@@ -452,16 +452,21 @@ class ToG2Reasoner:
         clues = None
         answer = None
         
+        # Theo dõi các thực thể đã duyệt
+        visited_entities = set()
+        
         # Step 1: Initial Topic Entities
         step_start_time = time.time()
         topic_entities = self.identify_topic_entities(query)
         initial_topic_entities = topic_entities.copy()  # Save for visualization
+        visited_entities.update(topic_entities)  # Thêm vào danh sách đã duyệt
         step_time = time.time() - step_start_time
         
         reasoning_steps.append({
             'step': 'Topic Entity Identification',
             'description': f'Identified {len(topic_entities)} initial topic entities',
             'entities': topic_entities,
+            'visited_count': len(visited_entities),  # Thêm số lượng entities đã duyệt
             'time': f"{step_time:.2f}s"
         })
         
@@ -475,6 +480,7 @@ class ToG2Reasoner:
             'step': 'Initial Context Retrieval',
             'description': f'Retrieved {len(initial_contexts)} initial context snippets',
             'documents': initial_contexts,
+            'visited_count': len(visited_entities),  # Thêm số lượng entities đã duyệt
             'time': f"0.00s"  # Already counted in the previous step
         })
         
@@ -489,6 +495,7 @@ class ToG2Reasoner:
                         'step': 'Answer Generation',
                         'description': 'Generated answer from initial context',
                         'answer': answer,
+                        'visited_count': len(visited_entities),  # Thêm số lượng entities đã duyệt
                         'time': f"0.00s"
                     })
                     return reasoning_steps, answer
@@ -499,7 +506,11 @@ class ToG2Reasoner:
         all_entity_chains = []
         all_contexts = initial_contexts
         
+        # Theo dõi số vòng lặp suy luận thực tế
+        actual_iterations = 0
+        
         for depth in range(self.max_depth):
+            actual_iterations += 1
             logger.info(f"Starting iteration {depth+1}/{self.max_depth}")
             step_start_time = time.time()
             iteration_chains = []
@@ -529,9 +540,10 @@ class ToG2Reasoner:
                             chain = (entity_name, relation['relation_name'], related_name)
                             iteration_chains.append(chain)
                             
-                            # Add to candidate entities for next iteration
+                            # Add to candidate entities for next iteration and track visited
                             if related_id not in next_topic_entities:
                                 next_topic_entities.append(related_id)
+                                visited_entities.add(related_id)  # Thêm vào danh sách đã duyệt
             
             # Add chains to the accumulated list
             all_entity_chains.extend(iteration_chains)
@@ -565,6 +577,8 @@ class ToG2Reasoner:
                 'entity_chains': iteration_chains,
                 'documents': iteration_contexts,
                 'topic_entities': topic_entities,
+                'visited_count': len(visited_entities),  # Thêm số lượng entities đã duyệt
+                'iteration': actual_iterations,  # Thêm số vòng lặp hiện tại
                 'time': f"{step_time:.2f}s"
             })
             
@@ -573,6 +587,10 @@ class ToG2Reasoner:
             if self.llm and (depth == self.max_depth - 1 or len(all_contexts) > 20):
                 # For the demo, we'll generate an answer at the end or if we have enough context
                 answer = self.generate_answer(query, all_contexts, all_entity_chains)
+                break
+            
+            # Nếu không tìm thấy thực thể mới, dừng vòng lặp
+            if not topic_entities:
                 break
         
         # Final answer generation if not done in the loop
@@ -584,6 +602,8 @@ class ToG2Reasoner:
             'step': 'Answer Generation',
             'description': 'Generated final answer based on all collected information',
             'answer': answer,
+            'visited_count': len(visited_entities),  # Thêm số lượng entities đã duyệt
+            'iteration': actual_iterations,  # Thêm số vòng lặp thực tế
             'time': f"0.00s"
         })
         
@@ -592,7 +612,21 @@ class ToG2Reasoner:
         reasoning_steps.append({
             'step': 'Total Processing',
             'description': 'Total processing time',
+            'visited_count': len(visited_entities),  # Thêm số lượng entities đã duyệt
+            'iteration': actual_iterations,  # Thêm số vòng lặp thực tế
             'time': f"{total_time:.2f}s"
+        })
+        
+        # Thêm metadata về quá trình
+        reasoning_steps.append({
+            'step': 'Process Metadata',
+            'description': 'Statistical information about the reasoning process',
+            'metadata': {
+                'total_entities_visited': len(visited_entities),
+                'total_iterations': actual_iterations,
+                'total_chains': len(all_entity_chains),
+                'total_contexts': len(all_contexts)
+            }
         })
         
         logger.info(f"Completed reasoning process in {total_time:.2f}s")
@@ -842,57 +876,107 @@ def main():
         
         # Process query
         if query:
-            # Create metrics for visualization
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.markdown(f"""
-                    <div class='metric-container'>
-                        <div class='metric-value'>{max_width}</div>
-                        <div class='metric-label'>Độ rộng tìm kiếm</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            with col2:
-                st.markdown(f"""
-                    <div class='metric-container'>
-                        <div class='metric-value'>{max_depth}</div>
-                        <div class='metric-label'>Độ sâu tìm kiếm</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            with col3:
-                st.markdown("""
-                    <div class='metric-container'>
-                        <div class='metric-value'>ToG-2</div>
-                        <div class='metric-label'>Phương pháp</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            # Create tabs for results and explanation
-            result_tab, process_tab, viz_tab = st.tabs(["Kết quả", "Quá trình suy luận", "Trực quan hóa"])
-            
-            with result_tab:
-                result_container = st.empty()
-            
-            with process_tab:
-                reasoning_container = st.container()
-                steps_placeholder = st.empty()
-            
-            with viz_tab:
-                viz_container = st.empty()
-            
             # Execute reasoning with real-time updates
             with st.spinner("Đang thực hiện suy luận..."):
                 # Execute reasoning
                 reasoning_steps, answer = reasoner.iterative_reasoning(query)
+                
+                # Sau khi có reasoning_steps, tính toán metrics
+                entity_count = 0
+                reasoning_steps_count = 0
+
+                # Lấy metadata từ reasoning_steps nếu có
+                for step in reasoning_steps:
+                    if 'step' in step and step['step'] == 'Process Metadata' and 'metadata' in step:
+                        metadata = step['metadata']
+                        entity_count = metadata.get('total_entities_visited', 0)
+                        break
+
+                # Đếm tổng số bước suy luận thực tế
+                for step in reasoning_steps:
+                    # Chỉ đếm các bước thực sự là bước suy luận
+                    if 'step' in step:
+                        # Bỏ qua các bước metadata và tổng thời gian xử lý
+                        if step['step'] not in ['Process Metadata', 'Total Processing']:
+                            reasoning_steps_count += 1
+
+                # Nếu không tìm thấy metadata về số thực thể
+                if entity_count == 0:
+                    for step in reasoning_steps:
+                        if 'visited_count' in step:
+                            entity_count = max(entity_count, step['visited_count'])
+
+                # Hiển thị metrics trước khi tạo tabs
+                col1, col2, col3, col4, col5 = st.columns(5)
+
+                with col1:
+                    st.markdown(f"""
+                        <div class='metric-container'>
+                            <div class='metric-value'>{max_width}</div>
+                            <div class='metric-label'>Độ rộng tìm kiếm</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                with col2:
+                    st.markdown(f"""
+                        <div class='metric-container'>
+                            <div class='metric-value'>{max_depth}</div>
+                            <div class='metric-label'>Độ sâu tìm kiếm</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                with col3:
+                    st.markdown(f"""
+                        <div class='metric-container'>
+                            <div class='metric-value'>{entity_count}</div>
+                            <div class='metric-label'>Thực thể đã duyệt</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                with col4:
+                    st.markdown(f"""
+                        <div class='metric-container'>
+                            <div class='metric-value'>{reasoning_steps_count}</div>
+                            <div class='metric-label'>Bước suy luận</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                with col5:
+                    st.markdown(f"""
+                        <div class='metric-container'>
+                            <div class='metric-value'>ToG-2</div>
+                            <div class='metric-label'>Phương pháp</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                # Tạo tabs cho kết quả và quá trình suy luận
+                result_tab, process_tab, viz_tab = st.tabs(["Kết quả", "Quá trình suy luận", "Trực quan hóa"])
+                    
+                with result_tab:
+                    result_container = st.empty()
+            
+                with process_tab:
+                    reasoning_container = st.container()
+                    steps_placeholder = st.empty()
+            
+                with viz_tab:
+                    viz_container = st.empty()
                 
                 # Function to update reasoning steps in UI
                 def update_reasoning_steps(steps):
                     with steps_placeholder.container():
                         for i, step in enumerate(steps, 1):
                             if 'step' in step:
-                                with st.expander(f"Bước {i}: {step['step']}", expanded=True):
+                                # Bỏ qua bước Process Metadata - chỉ dùng để lưu trữ dữ liệu
+                                if step['step'] == 'Process Metadata':
+                                    continue
+                                    
+                                # Tạo tiêu đề với thông tin bổ sung nếu có
+                                step_title = f"Bước {i}: {step['step']}"
+                                if 'visited_count' in step:
+                                    step_title += f" ({step['visited_count']} thực thể đã duyệt)"
+                                    
+                                with st.expander(step_title, expanded=True):
                                     st.markdown(step['description'])
                                     
                                     # Display time if present
@@ -930,6 +1014,15 @@ def main():
                                     if 'answer' in step:
                                         st.markdown("**Answer:**")
                                         st.write(step['answer'])
+                                        
+                                    # Hiển thị metadata nếu có
+                                    if 'metadata' in step:
+                                        st.markdown("**Process Statistics:**")
+                                        metadata = step['metadata']
+                                        st.write(f"- Total entities visited: {metadata.get('total_entities_visited', 0)}")
+                                        st.write(f"- Total iterations: {metadata.get('total_iterations', 0)}")
+                                        st.write(f"- Total entity chains: {metadata.get('total_chains', 0)}")
+                                        st.write(f"- Total context snippets: {metadata.get('total_contexts', 0)}")
                 
                 # Update reasoning steps
                 update_reasoning_steps(reasoning_steps)
@@ -971,6 +1064,6 @@ def main():
                             <p>{answer}</p>
                         </div>
                     """, unsafe_allow_html=True)
-
+                    
 if __name__ == "__main__":
     main()
