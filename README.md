@@ -6,6 +6,8 @@ A demonstration of the ToG-2 approach for multi-step reasoning using Knowledge G
 
 Think-on-Graph 2.0 (ToG-2) is an approach that tightly integrates Knowledge Graphs with textual documents to enhance the multi-step reasoning capabilities of Large Language Models (LLMs).
 
+Original idea: https://arxiv.org/pdf/2407.10805
+
 ### Key Features
 
 1. **Tight integration of KG and text**: Uses KG to guide information search in text, while using text to enrich and refine graph search.
